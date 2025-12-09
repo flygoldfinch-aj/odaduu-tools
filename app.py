@@ -35,9 +35,10 @@ def init_state():
         'num_rooms': 1, 'room_type': '', 'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
-        'policy_text_manual': '', # Holds the exact text from PDF or Manual input
+        'cancel_days': 3, 
         'room_size': '',
-        'room_options': [], 'suggestions': [], 'last_uploaded_file': None
+        'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
+        'policy_text_manual': ''
     }
     
     for i in range(10):
@@ -51,21 +52,24 @@ def init_state():
 init_state()
 
 def reset_booking_state():
-    """Hard reset of all data fields."""
+    """Hard reset: Wipes all data to prevent 'Sticky Data' bugs."""
     st.session_state.hotel_name = ''
     st.session_state.city = ''
     st.session_state.num_rooms = 1
     st.session_state.room_type = ''
     st.session_state.room_size = ''
-    st.session_state.policy_text_manual = '' # Reset policy text
     st.session_state.room_options = []
+    st.session_state.policy_text_manual = ''
+    st.session_state.suggestions = []
     
+    # Wipe rooms
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
         st.session_state[f'room_{i}_conf'] = ''
     
-    if 'search_input' in st.session_state: st.session_state['search_input'] = ""
-    st.session_state.suggestions = []
+    # Wipe Search Bar Widget
+    if 'search_input' in st.session_state:
+        st.session_state['search_input'] = ""
 
 # --- 3. AI FUNCTIONS ---
 
@@ -98,6 +102,7 @@ def extract_pdf_data(pdf_file):
         Extract booking details from this text.
         CRITICAL 1: Look for "Room 1", "Room 2" etc.
         CRITICAL 2: Read the Cancellation Policy text carefully.
+        CRITICAL 3: Extract exact room type names.
         
         Text Snippet: {text[:25000]}
         
@@ -107,11 +112,11 @@ def extract_pdf_data(pdf_file):
             "checkin_date": "YYYY-MM-DD", "checkout_date": "YYYY-MM-DD", 
             "meal_plan": "Plan", 
             "is_refundable": true, 
-            "cancellation_text": "The exact cancellation rule found in text (e.g. Free cancel until 20 Nov)",
+            "cancellation_text": "Exact policy text found",
             "room_size": "Size string",
             "rooms": [
-                {{"guest_name": "Guest Room 1", "confirmation_no": "Conf Room 1", "room_type": "Type 1", "adults": 2}},
-                {{"guest_name": "Guest Room 2", "confirmation_no": "Conf Room 2", "room_type": "Type 2", "adults": 2}}
+                {{"guest_name": "Guest Room 1", "confirmation_no": "Conf Room 1", "room_type": "Exact Type 1", "adults": 2}},
+                {{"guest_name": "Guest Room 2", "confirmation_no": "Conf Room 2", "room_type": "Exact Type 2", "adults": 2}}
             ]
         }}
         """
@@ -217,7 +222,6 @@ def generate_pdf(data, info, imgs, rooms_list):
         # Room Info
         r_items = [("Room Type:", data['room_type'], False), ("No. of Pax:", f"{data['adults']} Adults", False), ("Meal Plan:", data['meal'], False)]
         if data['room_size']: r_items.append(("Room Size:", data['room_size'], False))
-        # Use the explicit policy text
         r_items.append(("Cancellation:", data['policy'], "Refundable" in data['policy']))
         draw_sect("Room Information", r_items)
 
@@ -266,13 +270,13 @@ def generate_pdf(data, info, imgs, rooms_list):
 
 st.title("🏯 Odaduu Voucher Generator")
 
-# === UPLOAD (STATE RESET LOGIC) ===
+# === UPLOAD ===
 with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     up_file = st.file_uploader("Drop PDF here", type="pdf")
     if up_file:
         if st.session_state.last_uploaded_file != up_file.name:
             with st.spinner("Processing New File..."):
-                reset_booking_state() # WIPE OLD DATA
+                reset_booking_state() # HARD RESET
                 
                 data = extract_pdf_data(up_file)
                 if data:
@@ -297,7 +301,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     
                     if st.session_state.hotel_name:
                         st.session_state.room_options = get_room_types(st.session_state.hotel_name)
-                        # Fix: Ensure extracted room type is in options list
+                        # CRITICAL: Force extracted room type to top of list
                         if st.session_state.room_type and st.session_state.room_type not in st.session_state.room_options:
                             st.session_state.room_options.insert(0, st.session_state.room_type)
                     
@@ -355,7 +359,7 @@ with c1:
     ptype = st.radio("Type", ["Non-Refundable", "Refundable"], horizontal=True, key="policy_type")
 
 with c2:
-    # SAFE DATE LOGIC
+    # SAFE DATE LOGIC (Prevents Crash)
     curr_in = st.session_state.checkin
     min_out = curr_in + timedelta(days=1)
     if st.session_state.checkout <= curr_in: st.session_state.checkout = min_out
@@ -365,36 +369,35 @@ with c2:
     
     opts = st.session_state.room_options.copy()
     current = st.session_state.room_type
-    if current and current not in opts: opts.insert(0, current)
+    
+    # Ensure Current PDF Value is always in dropdown
+    if current and current not in opts: 
+        opts.insert(0, current)
+        
     opts.append("Manual...")
     
     def on_room_change():
         if st.session_state.room_sel != "Manual...": st.session_state.room_type = st.session_state.room_sel
             
-    st.selectbox("Room Type", opts, key="room_sel", on_change=on_room_change)
+    # Calculate index to prevent 'not in list' error
+    idx = 0
+    if current in opts: idx = opts.index(current)
+        
+    st.selectbox("Room Type", opts, index=idx, key="room_sel", on_change=on_room_change)
     if st.session_state.get("room_sel") == "Manual...": st.text_input("Type Name", key="room_type")
     
     st.number_input("Adults", 1, key="adults")
     st.text_input("Size (Optional)", key="room_size")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
-    # POLICY LOGIC: Priority to Manual/PDF Text -> Fallback to Calculator
-    final_policy_txt = "Non-Refundable & Non-Amendable"
-    
+    policy_txt = "Non-Refundable & Non-Amendable"
     if ptype == "Refundable":
-        # Show text area with current value (from PDF or default)
         manual_txt = st.text_input("Policy Description", value=st.session_state.policy_text_manual, key="policy_text_manual")
-        
-        # If manual text exists, use it. Else use calculator.
-        if manual_txt:
-            final_policy_txt = manual_txt
+        if manual_txt: policy_txt = manual_txt
         else:
             d = st.number_input("Free Cancel Days", 1, value=3)
-            final_policy_txt = f"Free Cancellation until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
-            st.info(f"Auto-generated: {final_policy_txt}")
-    else:
-        # If Non-Refundable, force text
-        final_policy_txt = "Non-Refundable & Non-Amendable"
+            policy_txt = f"Free Cancellation until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
+            st.info(f"Auto-generated: {policy_txt}")
 
 if st.button("Generate Voucher", type="primary"):
     with st.spinner("Creating PDF..."):
@@ -415,7 +418,7 @@ if st.button("Generate Voucher", type="primary"):
         pdf_data = {
             "hotel": st.session_state.hotel_name, "in": st.session_state.checkin, "out": st.session_state.checkout,
             "room_type": st.session_state.room_type, "adults": st.session_state.adults, "meal": st.session_state.meal_plan,
-            "policy": final_policy_txt, "room_size": st.session_state.room_size
+            "policy": policy_txt, "room_size": st.session_state.room_size
         }
         
         pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_final)
