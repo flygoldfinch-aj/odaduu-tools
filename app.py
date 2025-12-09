@@ -178,35 +178,41 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         except: pass
     y = img_y - 20
 
-    # Policy
+    # Policy Table (Now with GRID box)
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y -= 15
     data_t = [["Policy", "Time / Detail"], 
               ["Standard Check-in Time:", hotel_info.get("checkin_time", "3:00 PM")], 
-              ["Standard Check-out Time:", hotel_info.get("checkout_time", "12:00 PM")], # Fixed to 12PM
+              ["Standard Check-out Time:", hotel_info.get("checkout_time", "12:00 PM")],
               ["Early Check-in/Late Out:", "Subject to availability. Request upon arrival."],
               ["Required at Check-in:", "Passport & Credit Card/Cash Deposit."]]
-    t = Table(data_t, colWidths=[130, 380]) # Slightly wider first col
-    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),odaduu_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)),
-                           ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3)]))
+    t = Table(data_t, colWidths=[130, 380])
+    t.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0),odaduu_blue),
+        ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)),
+        ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
+        ('FONTSIZE',(0,0),(-1,-1),8),
+        ('PADDING',(0,0),(-1,-1),3),
+        ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2)) # Adds the table box
+    ]))
     t.wrapOn(c, width, height); t.drawOn(c, left, y - 60); y -= (60 + 15)
 
-    # T&C - FULL TEXT (Wrapped & Smaller Font)
+    # T&C - FULL TEXT (Wrapped & Bullets)
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
     
-    # The full original text list
+    # The full original text list with BULLETS
     tnc_raw = [
-        "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
-        f"2. Identification: The lead guest, {data['guest_name']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
-        "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
-        "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
-        f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
-        "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
-        "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
-        "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
-        "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel."
+        "• Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
+        f"• Identification: The lead guest, {data['guest_name']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
+        "• No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
+        "• Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
+        f"• Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
+        "• Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
+        "• Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
+        "• Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
+        "• City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel."
     ]
     
-    c.setFillColor(text_color); c.setFont("Helvetica", 6.5) # Smaller font for fit
+    c.setFillColor(text_color); c.setFont("Helvetica", 6.5)
     
     for item in tnc_raw:
         # Wrap long lines to 130 characters so they don't run off page
@@ -215,7 +221,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
             if y > 50: # Check footer collision
                 c.drawString(left, y, line)
                 y -= 8 # Line spacing
-        y -= 2 # Extra gap between numbered items
+        y -= 2 # Extra gap between items
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
