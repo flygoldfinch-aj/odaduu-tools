@@ -153,7 +153,7 @@ def draw_text_on_arc(c, text, cx, cy, radius, start_angle, end_angle, font_size=
     c.restoreState()
 
 def draw_vector_seal(c, x, y, size):
-    """Draws a vector seal with text along the ring."""
+    """Draws a vector seal with arced text and central text."""
     c.saveState()
     
     # Seal style (dark blue, semi-transparent)
@@ -168,22 +168,24 @@ def draw_vector_seal(c, x, y, size):
     cx, cy = x + size / 2, y + size / 2
     r_outer = size / 2
     r_inner = r_outer - 4
-    r_text = r_inner - 7 # Baseline radius for text
+    r_text = r_inner - 7 # Baseline radius for arced text
 
     # Draw Rings
     c.circle(cx, cy, r_outer, stroke=1, fill=0)
     c.setLineWidth(0.5)
     c.circle(cx, cy, r_inner, stroke=1, fill=0)
 
-    # Center Icon (Star)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(cx, cy - 4, "★")
+    # --- Center Text (ODADUU TRAVEL DMC) ---
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(cx, cy + 4, "ODADUU")
+    c.setFont("Helvetica-Bold", 7)
+    c.drawCentredString(cx, cy - 6, "TRAVEL DMC")
 
-    # Draw Arced Text
-    # Top Arc: "CERTIFIED VOUCHER" (spanning approx 150 to 30 degrees)
+    # --- Arced Text ---
+    # Top Arc: "CERTIFIED VOUCHER"
     draw_text_on_arc(c, "CERTIFIED VOUCHER", cx, cy, r_text, 150, 30, font_size=7)
 
-    # Bottom Arc: "OFFICIAL" (spanning approx 220 to 320 degrees), flipped to be readable at bottom
+    # Bottom Arc: "OFFICIAL", flipped
     draw_text_on_arc(c, "OFFICIAL", cx, cy, r_text, 230, 310, font_size=7, flip=True)
 
     c.restoreState()
@@ -317,7 +319,8 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
 
     # --- NEW: VECTOR AUTHENTICATION SEAL WITH ARCED TEXT ---
     # Draws the seal directly onto the PDF.
-    draw_vector_seal(c, width - 130, 65, 80)
+    # Moved down by changing y from 65 to 62.
+    draw_vector_seal(c, width - 130, 62, 80)
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
