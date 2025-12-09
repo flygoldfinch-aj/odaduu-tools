@@ -17,7 +17,7 @@ from math import sin, cos, radians
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
 
-# Load Keys from secrets.toml
+# Load Keys
 try:
     GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
     SEARCH_KEY = st.secrets["SEARCH_API_KEY"]
@@ -32,37 +32,28 @@ except Exception:
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
-    The user is searching for a hotel. Input: "{query}".
-    Return a JSON list of the 3 most likely FULL OFFICIAL hotel names.
-    Return JSON ONLY: ["Name 1", "Name 2", "Name 3"]
+    User search: "{query}".
+    Return JSON list of 3 most likely FULL OFFICIAL hotel names.
+    JSON ONLY: ["Name 1", "Name 2", "Name 3"]
     """
     try:
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
+        return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
     except: return []
 
 def detect_city_from_hotel(hotel_name):
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
     What city is the hotel "{hotel_name}" located in?
-    Return ONLY the city name as a string (e.g. "Osaka", "Kyoto", "Tokyo").
-    Do not include country or state.
+    Return ONLY the city name string (e.g. "Osaka"). No country.
     """
-    try:
-        return model.generate_content(prompt).text.strip()
+    try: return model.generate_content(prompt).text.strip()
     except: return ""
 
 def get_room_types_for_hotel(hotel_name):
     model = genai.GenerativeModel('gemini-2.0-flash')
-    prompt = f"""
-    List 10 common room category names for the hotel: "{hotel_name}".
-    Return ONLY a JSON list of strings.
-    """
+    prompt = f"List 10 common room category names for '{hotel_name}'. Return JSON list of strings."
     try:
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
+        return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
     except: return []
 
 def extract_details_from_pdf(pdf_file):
@@ -74,16 +65,27 @@ def extract_details_from_pdf(pdf_file):
             
         model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = f"""
-        Extract booking details. Return JSON ONLY. Use null if not found.
-        Text: {text[:10000]}
-        Structure:
+        Extract booking details. Look for MULTIPLE rooms if present.
+        Text: {text[:15000]}
+        
+        Return JSON Structure:
         {{
-            "hotel_name": "Name", "city": "City", "guest_name": "Name",
-            "confirmation_no": "Ref", "checkin_date": "YYYY-MM-DD",
-            "checkout_date": "YYYY-MM-DD", "room_type": "Type",
-            "adults": 2, "meal_plan": "Plan",
-            "is_refundable": true/false, "cancel_deadline": "YYYY-MM-DD",
-            "room_size": "Size string if found"
+            "hotel_name": "Name", 
+            "city": "City", 
+            "checkin_date": "YYYY-MM-DD",
+            "checkout_date": "YYYY-MM-DD", 
+            "meal_plan": "Plan",
+            "is_refundable": true/false, 
+            "cancel_deadline": "YYYY-MM-DD",
+            "room_size": "Size string if found",
+            "rooms": [
+                {{
+                    "guest_name": "Lead Name Room 1",
+                    "room_type": "Type Room 1",
+                    "confirmation_no": "Ref Room 1",
+                    "adults": 2
+                }}
+            ]
         }}
         """
         return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
@@ -158,9 +160,11 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobb
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
     left = 40; center_x = width / 2
     
+    # Watermark
     try: c.saveState(); c.setFillAlpha(0.04); c.drawImage("logo.png", center_x - 200, height/2 - 75, width=400, height=150, mask='auto', preserveAspectRatio=True); c.restoreState()
     except: pass
 
+    # Header
     try: c.drawImage("logo.png", center_x - 80, height - 60, width=160, height=55, mask='auto', preserveAspectRatio=True)
     except: c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(center_x, height - 50, "ODADUU TRAVEL DMC")
 
@@ -174,6 +178,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobb
         c.drawString(left + 120, y, str(val)); return y - 12
 
     y = height - 120
+    # Sections
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Guest Information")
     y -= 5; c.setStrokeColor(lightgrey); c.line(left, y, width-40, y); y -= 12
     y = row(y, "Guest Name:", data['guest_name'], True)
@@ -276,8 +281,9 @@ if search_q:
                 selected_hotel = st.radio("Select Correct Hotel:", suggestions)
                 if selected_hotel:
                     if st.session_state.form_data.get('hotel_name') != selected_hotel:
-                        st.session_state.form_data['hotel_name'] = selected_hotel
-                        with st.spinner("Detecting..."):
+                        # Clear old data when switching hotels manually
+                        st.session_state.form_data = {'hotel_name': selected_hotel}
+                        with st.spinner("Detecting details..."):
                             st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
                             detected_city = detect_city_from_hotel(selected_hotel)
                             if detected_city: st.session_state.form_data['city'] = detected_city
@@ -289,28 +295,49 @@ with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
         with st.spinner("Reading PDF..."):
             extracted = extract_details_from_pdf(uploaded_file)
             if extracted:
-                st.session_state.form_data.update(extracted)
+                # WIPE old data, replace with new extraction
+                st.session_state.form_data = extracted
                 st.session_state.last_uploaded = uploaded_file.name
-                if extracted.get('hotel_name'): st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
-                st.success("Data Extracted!")
+                
+                # Fetch rooms for new hotel
+                if extracted.get('hotel_name'): 
+                    st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
+                
+                st.success("Data Extracted! Form updated.")
+                st.rerun() # Force UI refresh
 
 st.markdown("### 📝 2. Booking Details")
 col1, col2 = st.columns(2)
 with col1:
     hotel_name = st.text_input("Hotel Name", value=get_val("hotel_name", ""))
     city = st.text_input("City", value=get_val("city", "Osaka"))
-    guest_name = st.text_input("Lead Guest Name", value=get_val("guest_name", ""))
+    
+    # Guest Name Handling (From Room 1)
+    rooms_data = get_val("rooms", [])
+    default_guest = rooms_data[0]['guest_name'] if rooms_data else get_val("guest_name", "")
+    guest_name = st.text_input("Lead Guest Name", value=default_guest)
+    
     st.subheader("Room Details")
-    num_rooms = st.number_input("Number of Rooms", 1, value=1)
+    # Auto-detect number of rooms
+    default_num = len(rooms_data) if rooms_data else 1
+    num_rooms = st.number_input("Number of Rooms", 1, value=default_num)
+    
     conf_numbers = []
-    default_conf = get_val("confirmation_no", "")
+    
     if num_rooms > 1:
-        if st.checkbox("Same Confirmation No?", True):
-            main_conf = st.text_input("Confirmation No (All)", value=default_conf)
+        if st.checkbox("Same Confirmation No?", False): # Default false for multi-room
+            main_conf = st.text_input("Confirmation No (All)", value="")
             conf_numbers = [main_conf] * num_rooms
         else:
-            for i in range(num_rooms): conf_numbers.append(st.text_input(f"Room {i+1} Conf No", value=default_conf))
-    else: conf_numbers.append(st.text_input("Confirmation No", value=default_conf))
+            for i in range(num_rooms):
+                # Pre-fill from extracted data if available
+                val = rooms_data[i]['confirmation_no'] if i < len(rooms_data) else ""
+                conf_numbers.append(st.text_input(f"Room {i+1} Conf No", value=val))
+    else:
+        # Single room pre-fill
+        val = rooms_data[0]['confirmation_no'] if rooms_data else get_val("confirmation_no", "")
+        conf_numbers.append(st.text_input("Confirmation No", value=val))
+
     st.subheader("Policy")
     def_pol = "Refundable" if get_val("is_refundable", False) else "Non-Refundable"
     policy_type = st.radio("Refundable?", ["Non-Refundable", "Refundable"], index=0 if def_pol=="Non-Refundable" else 1, horizontal=True)
@@ -327,12 +354,14 @@ with col2:
     if d_out_def <= checkin: d_out_def = min_out
     checkout = st.date_input("Check-Out", value=d_out_def, min_value=min_out)
     
-    current_room_val = get_val("room_type", "")
+    # Room Type (Try to match extracted type)
+    current_room_val = rooms_data[0]['room_type'] if rooms_data else get_val("room_type", "")
     options = st.session_state.room_options.copy()
     if current_room_val and current_room_val not in options: options.insert(0, current_room_val)
     options.append("Type Manually...")
     sel_room = st.selectbox("Room Type", options)
     room_type = st.text_input("Enter Room Name", "") if sel_room == "Type Manually..." else sel_room
+    
     adults = st.number_input("Adults", 1, value=get_val("adults", 2))
     room_size = st.text_input("Room Size (Optional - e.g. 35 sqm)", value=get_val("room_size", ""), help="Leave blank to hide in PDF")
     opts = ["Breakfast Only", "Room Only", "Half Board", "Full Board"]
