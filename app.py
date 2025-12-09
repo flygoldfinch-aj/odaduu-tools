@@ -28,24 +28,18 @@ except Exception:
 
 # --- 2. SESSION STATE MANAGEMENT ---
 def init_state():
-    # Initialize all keys with defaults
     defaults = {
-        'hotel_name': '', 
-        'city': '', 
+        'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 
-        'room_type': '', 
-        'adults': 2, 
+        'num_rooms': 1, 'room_type': '', 'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'cancel_days': 3, 
         'room_size': '',
-        'room_options': [],
-        'suggestions': [],
-        'search_query': '', # FIXED: Added missing key to prevent crash
-        'last_uploaded_file': None,
-        'policy_text_manual': ''
+        'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
+        'policy_text_manual': '',
+        'search_query': ''
     }
     
     for i in range(10):
@@ -69,12 +63,10 @@ def reset_booking_state():
     st.session_state.policy_text_manual = ''
     st.session_state.suggestions = []
     
-    # Wipe rooms
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
         st.session_state[f'room_{i}_conf'] = ''
     
-    # FIXED: Clear the Search Bar Widget
     if 'search_input' in st.session_state:
         st.session_state.search_input = ""
     st.session_state.search_query = ""
@@ -106,13 +98,12 @@ def extract_pdf_data(pdf_file):
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
         model = genai.GenerativeModel('gemini-2.0-flash')
-        # UPDATED PROMPT: Better handling of line-breaks in Room Types
         prompt = f"""
-        Extract booking details.
+        Extract booking details from this text.
         
         CRITICAL 1: Look for "Room 1", "Room 2".
-        CRITICAL 2: The Room Type often appears on the line BELOW the label "Room Type" or "Confirmation #". Capture the full string (e.g. "Heritage Kutiya").
-        CRITICAL 3: Read Cancellation Policy carefully.
+        CRITICAL 2: Read Cancellation Policy. Extract exact text found.
+        CRITICAL 3: Extract exact room type.
         
         Text Snippet: {text[:25000]}
         
@@ -122,7 +113,7 @@ def extract_pdf_data(pdf_file):
             "checkin_date": "YYYY-MM-DD", "checkout_date": "YYYY-MM-DD", 
             "meal_plan": "Plan", 
             "is_refundable": true, 
-            "cancellation_text": "Exact policy text found",
+            "cancellation_text": "Exact text found in PDF",
             "room_size": "Size string",
             "rooms": [
                 {{"guest_name": "Guest Room 1", "confirmation_no": "Conf Room 1", "room_type": "Exact Type 1", "adults": 2}},
@@ -252,14 +243,25 @@ def generate_pdf(data, info, imgs, rooms_list):
 
         # Policies
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y-=15
-        pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability."], ["Required:", "Passport & Credit Card."]]
+        pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability. Request upon arrival."], ["Required:", "Passport & Credit Card/Cash Deposit."]]
         t = Table(pt, colWidths=[130, 380])
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),Color(0.05, 0.15, 0.35)), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
         # T&C
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
-        tnc = ["1. Voucher Validity: Valid for dates/services specified. Present at front desk.", f"2. Identification: Lead guest ({room['guest']}) must present Passport.", "3. No-Show: Full fee applies.", "4. Incidentals: Settled directly at hotel.", "5. Occupancy: Changes may incur charges.", "6. Hotel Rights: Refusal for inappropriate conduct.", "7. Liability: Use safety box for valuables.", "8. Non-Transferable: Cannot be resold.", "9. City Tax: Paid directly at hotel.", "10. Bed Type: Subject to availability."]
+        tnc = [
+            "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
+            f"2. Identification: The lead guest, {room['guest']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
+            "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
+            "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
+            f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
+            "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
+            "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
+            "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
+            "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
+            "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
+        ]
         styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
         t_data = [[Paragraph(x, styleN)] for x in tnc]
         t2 = Table(t_data, colWidths=[510])
@@ -286,7 +288,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     if up_file:
         if st.session_state.last_uploaded_file != up_file.name:
             with st.spinner("Processing New File..."):
-                reset_booking_state() # WIPE OLD DATA INCLUDING SEARCH BAR
+                reset_booking_state()
                 
                 data = extract_pdf_data(up_file)
                 if data:
@@ -304,24 +306,27 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
-                        # Fix: Take the specific room type from the extraction
                         st.session_state.room_type = rooms[0].get('room_type', '')
-                        
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                             st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
                     
                     if st.session_state.hotel_name:
                         st.session_state.room_options = get_room_types(st.session_state.hotel_name)
-                        # CRITICAL: Force extracted room type to top of list
                         if st.session_state.room_type and st.session_state.room_type not in st.session_state.room_options:
                             st.session_state.room_options.insert(0, st.session_state.room_type)
                     
-                    # Policy extraction
-                    extracted_policy = data.get('cancellation_text', '')
-                    if data.get('is_refundable') or extracted_policy:
+                    # FIX: STRICT NON-REFUNDABLE LOGIC
+                    extracted_text = data.get('cancellation_text', '')
+                    is_ref = data.get('is_refundable', False)
+                    
+                    # If text contains "non-refundable", force flag to False
+                    if extracted_text and "non-refundable" in extracted_text.lower():
+                        is_ref = False
+                    
+                    if is_ref:
                         st.session_state.policy_type = 'Refundable'
-                        st.session_state.policy_text_manual = extracted_policy
+                        st.session_state.policy_text_manual = extracted_text
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
                         st.session_state.policy_text_manual = 'Non-Refundable & Non-Amendable'
@@ -371,7 +376,6 @@ with c1:
     ptype = st.radio("Type", ["Non-Refundable", "Refundable"], horizontal=True, key="policy_type")
 
 with c2:
-    # SAFE DATE LOGIC (Prevents Crash)
     curr_in = st.session_state.checkin
     min_out = curr_in + timedelta(days=1)
     if st.session_state.checkout <= curr_in: st.session_state.checkout = min_out
@@ -382,7 +386,6 @@ with c2:
     opts = st.session_state.room_options.copy()
     current = st.session_state.room_type
     
-    # Ensure Current PDF Value is always in dropdown
     if current and current not in opts: 
         opts.insert(0, current)
         
@@ -391,7 +394,6 @@ with c2:
     def on_room_change():
         if st.session_state.room_sel != "Manual...": st.session_state.room_type = st.session_state.room_sel
             
-    # Calculate index to prevent 'not in list' error
     idx = 0
     if current in opts: idx = opts.index(current)
         
