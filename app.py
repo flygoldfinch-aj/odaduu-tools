@@ -13,7 +13,7 @@ from reportlab.lib.utils import ImageReader
 import pypdf
 import textwrap
 from math import sin, cos, radians
-import re # Added for date cleaning
+import re # Added for advanced text cleaning
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -75,16 +75,28 @@ def reset_booking_state():
 # --- 3. HELPER FUNCTIONS ---
 
 def parse_smart_date(date_str):
-    """Cleans and parses dates like '28 Sept 2025'."""
+    """Robust date parser handling 'Sept', 'Sep', etc."""
     if not date_str: return None
-    try:
-        # Fix "Sept" to "Sep"
-        clean_str = date_str.replace("Sept", "Sep").strip()
-        return datetime.strptime(clean_str, "%d %b %Y").date()
-    except:
-        # Try YYYY-MM-DD
-        try: return datetime.strptime(date_str, "%Y-%m-%d").date()
-        except: return None
+    
+    # 1. Clean the string
+    clean_str = date_str.strip()
+    # Replace "Sept" with "Sep" (Common PDF error)
+    clean_str = re.sub(r'\bSept\b', 'Sep', clean_str, flags=re.IGNORECASE)
+    
+    # 2. Try formats
+    formats = [
+        "%d %b %Y",     # 28 Sep 2025
+        "%Y-%m-%d",     # 2025-09-28
+        "%d %B %Y",     # 28 September 2025
+        "%b %d, %Y"     # Sep 28, 2025
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(clean_str, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 # --- 4. AI FUNCTIONS ---
 
@@ -114,10 +126,10 @@ def extract_pdf_data(pdf_file):
         
         model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = f"""
-        Extract booking details from this text.
+        Extract booking details.
         
-        CRITICAL 1: Dates. Look for "Check-in" and "Check-out". Format as "DD Mon YYYY" (e.g. 28 Sept 2025).
-        CRITICAL 2: Cancellation. If free cancellation exists, EXTRACT THE DEADLINE DATE.
+        CRITICAL 1: Dates. Look for "Check-in" and "Check-out". 
+        CRITICAL 2: Cancellation. If free cancellation exists, FIND THE DEADLINE DATE (e.g., "before 27 Sept 2025").
         CRITICAL 3: Rooms. Look for "Room 1", "Room 2".
         
         Text Snippet: {text[:25000]}
@@ -125,11 +137,11 @@ def extract_pdf_data(pdf_file):
         Return JSON:
         {{
             "hotel_name": "Name", "city": "City", 
-            "checkin_date": "YYYY-MM-DD or DD Mon YYYY", 
-            "checkout_date": "YYYY-MM-DD or DD Mon YYYY", 
+            "checkin_date": "DD Mon YYYY", 
+            "checkout_date": "DD Mon YYYY", 
             "meal_plan": "Plan", 
-            "is_refundable": true/false, 
-            "cancel_deadline_date": "YYYY-MM-DD or DD Mon YYYY (Only if refundable)",
+            "is_refundable": true, 
+            "cancel_deadline_date": "DD Mon YYYY (Extraction of the date ONLY, leave null if non-refundable)",
             "room_size": "Size string",
             "rooms": [
                 {{"guest_name": "Guest 1", "confirmation_no": "Conf 1", "room_type": "Type 1", "adults": 2}},
@@ -299,11 +311,12 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     st.session_state.hotel_name = data.get('hotel_name', '')
                     st.session_state.city = data.get('city', '')
                     
-                    # DATE CLEANING LOGIC
-                    try: st.session_state.checkin = parse_smart_date(data.get('checkin_date'))
-                    except: pass
-                    try: st.session_state.checkout = parse_smart_date(data.get('checkout_date'))
-                    except: pass
+                    # DATE PARSING FIX (Handle 'Sept')
+                    d_in = parse_smart_date(data.get('checkin_date'))
+                    d_out = parse_smart_date(data.get('checkout_date'))
+                    
+                    if d_in: st.session_state.checkin = d_in
+                    if d_out: st.session_state.checkout = d_out
                     
                     st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
                     
@@ -321,20 +334,19 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         if st.session_state.room_type and st.session_state.room_type not in st.session_state.room_options:
                             st.session_state.room_options.insert(0, st.session_state.room_type)
                     
-                    # POLICY LOGIC: Calculate days if deadline provided
-                    deadline_str = data.get('cancel_deadline_date', '')
+                    # CANCELLATION LOGIC FIX
                     is_ref = data.get('is_refundable', False)
+                    dead_date_str = data.get('cancel_deadline_date')
                     
-                    if is_ref and deadline_str:
-                        st.session_state.policy_type = 'Refundable'
-                        st.session_state.policy_text_manual = '' # Use calculator
-                        try:
-                            d_date = parse_smart_date(deadline_str)
-                            if d_date:
-                                # Logic: Checkin (28) - Deadline (27) = 1 day
-                                delta = (st.session_state.checkin - d_date).days
-                                st.session_state.cancel_days = max(0, delta)
-                        except: pass
+                    if is_ref and dead_date_str:
+                        dead_date = parse_smart_date(dead_date_str)
+                        if dead_date:
+                            st.session_state.policy_type = 'Refundable'
+                            st.session_state.policy_text_manual = '' # Empty text to force calculator
+                            
+                            # Calculate days: Checkin - Deadline
+                            delta = (st.session_state.checkin - dead_date).days
+                            st.session_state.cancel_days = max(1, delta)
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
                         st.session_state.policy_text_manual = 'Non-Refundable & Non-Amendable'
