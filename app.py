@@ -12,7 +12,7 @@ import json
 from reportlab.lib.utils import ImageReader
 import pypdf
 import textwrap
-from math import pi
+from math import sin, cos, radians
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -123,41 +123,68 @@ def get_safe_image_reader(url):
 
 # --- 3. PDF GENERATION ---
 
-def draw_vector_seal(c, x, y, size):
-    """Draws a vector-based authentication seal."""
+def draw_text_on_arc(c, text, cx, cy, radius, start_angle, end_angle, font_size=8, flip=False):
+    """Helper function to draw text along a circular path."""
+    c.setFont("Helvetica-Bold", font_size)
+    if not text: return
+
+    total_angle = end_angle - start_angle
+    angle_step = total_angle / (len(text) - 1) if len(text) > 1 else 0
+
     c.saveState()
-    # Set seal color (dark blue) and transparency
+    c.translate(cx, cy)
+
+    current_angle = start_angle
+    for char in text:
+        c.saveState()
+        # Calculate position on circle
+        theta = radians(current_angle)
+        x_pos = radius * cos(theta)
+        y_pos = radius * sin(theta)
+        c.translate(x_pos, y_pos)
+        
+        # Rotate character to align with tangent
+        rot_angle = current_angle - 90 if not flip else current_angle + 90
+        c.rotate(rot_angle)
+        
+        c.drawCentredString(0, 0, char)
+        c.restoreState()
+        current_angle += angle_step
+    c.restoreState()
+
+def draw_vector_seal(c, x, y, size):
+    """Draws a vector seal with text along the ring."""
+    c.saveState()
+    
+    # Seal style (dark blue, semi-transparent)
     seal_color = Color(0.1, 0.2, 0.4)
     c.setStrokeColor(seal_color)
     c.setFillColor(seal_color)
-    c.setFillAlpha(0.7)
-    c.setStrokeAlpha(0.7)
-    c.setLineWidth(2)
+    c.setFillAlpha(0.8)
+    c.setStrokeAlpha(0.8)
+    c.setLineWidth(1.5)
 
-    # Center point
+    # Geometry
     cx, cy = x + size / 2, y + size / 2
     r_outer = size / 2
-    r_inner = r_outer - 5
+    r_inner = r_outer - 4
+    r_text = r_inner - 7 # Baseline radius for text
 
-    # Draw rings
+    # Draw Rings
     c.circle(cx, cy, r_outer, stroke=1, fill=0)
-    c.setLineWidth(1)
+    c.setLineWidth(0.5)
     c.circle(cx, cy, r_inner, stroke=1, fill=0)
 
-    # Draw center text
-    c.setFont("Helvetica-Bold", 10)
-    c.drawCentredString(cx, cy + 5, "ODADUU")
-    c.setFont("Helvetica-Bold", 7)
-    c.drawCentredString(cx, cy - 5, "TRAVEL DMC")
-    
-    # Draw arcing text (simplified as straight text rotated)
-    c.setFont("Helvetica-Bold", 6)
-    c.saveState()
-    c.translate(cx, cy)
-    c.rotate(25) # Slight rotation for stamped look
-    c.drawCentredString(0, r_inner - 12, "CERTIFIED AUTHENTIC")
-    c.drawCentredString(0, -r_inner + 8, "OFFICIAL VOUCHER")
-    c.restoreState()
+    # Center Icon (Star)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(cx, cy - 4, "★")
+
+    # Draw Arced Text
+    # Top Arc: "CERTIFIED VOUCHER" (spanning approx 150 to 30 degrees)
+    draw_text_on_arc(c, "CERTIFIED VOUCHER", cx, cy, r_text, 150, 30, font_size=7)
+
+    # Bottom Arc: "OFFICIAL" (spanning approx 220 to 320 degrees), flipped to be readable at bottom
+    draw_text_on_arc(c, "OFFICIAL", cx, cy, r_text, 230, 310, font_size=7, flip=True)
 
     c.restoreState()
 
@@ -288,8 +315,8 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     w_tnc, h_tnc = t_tnc.wrapOn(c, width, height)
     t_tnc.drawOn(c, left, y - h_tnc)
 
-    # --- NEW: VECTOR AUTHENTICATION SEAL ---
-    # Draws the seal directly onto the PDF, ensuring transparency and sharpness.
+    # --- NEW: VECTOR AUTHENTICATION SEAL WITH ARCED TEXT ---
+    # Draws the seal directly onto the PDF.
     draw_vector_seal(c, width - 130, 65, 80)
 
     # Footer
