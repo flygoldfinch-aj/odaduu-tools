@@ -65,8 +65,11 @@ def extract_details_from_pdf(pdf_file):
             
         model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = f"""
-        Analyze this booking text. It might contain MULTIPLE rooms (Room 1, Room 2, etc.).
-        Text: {text[:15000]}
+        Extract booking details from this text. 
+        CRITICAL: Look for "Room 1", "Room 2", etc. If multiple confirmations or guest names appear, create multiple objects in 'rooms'.
+        
+        Text Snippet:
+        {text[:15000]}
         
         Return JSON Structure:
         {{
@@ -80,15 +83,15 @@ def extract_details_from_pdf(pdf_file):
             "room_size": "Size string if found",
             "rooms": [
                 {{
-                    "guest_name": "Name for Room 1",
-                    "room_type": "Type for Room 1",
-                    "confirmation_no": "Ref for Room 1",
+                    "guest_name": "Lead Name Room 1",
+                    "room_type": "Type Room 1",
+                    "confirmation_no": "Ref Room 1",
                     "adults": 2
                 }},
                 {{
-                    "guest_name": "Name for Room 2 (if exists)",
-                    "room_type": "Type for Room 2",
-                    "confirmation_no": "Ref for Room 2",
+                    "guest_name": "Lead Name Room 2",
+                    "room_type": "Type Room 2",
+                    "confirmation_no": "Ref Room 2",
                     "adults": 2
                 }}
             ]
@@ -263,11 +266,9 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobb
 def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_lobby_url, img_room_url, conf_numbers_list, guests_list):
     buffer = io.BytesIO(); c = canvas.Canvas(buffer, pagesize=A4); width, height = A4
     img_ext = get_safe_image_reader(img_exterior_url); img_lobby = get_safe_image_reader(img_lobby_url); img_room = get_safe_image_reader(img_room_url)
-    
     for i, conf in enumerate(conf_numbers_list):
         current_guest = guests_list[i] if i < len(guests_list) else guests_list[0]
-        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_lobby, img_room, conf, current_guest, i+1, len(conf_numbers_list))
-        c.showPage()
+        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_lobby, img_room, conf, current_guest, i+1, len(conf_numbers_list)); c.showPage()
     c.save(); buffer.seek(0); return buffer
 
 # --- 4. UI LOGIC ---
@@ -283,16 +284,17 @@ if search_q:
     with col_res:
         with st.spinner("Finding..."):
             suggestions = get_hotel_suggestions(search_q)
-            if suggestions:
-                selected_hotel = st.radio("Select Correct Hotel:", suggestions)
-                if selected_hotel:
-                    if st.session_state.form_data.get('hotel_name') != selected_hotel:
-                        st.session_state.form_data = {'hotel_name': selected_hotel} # WIPE OLD DATA
-                        with st.spinner("Detecting..."):
-                            st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
-                            detected_city = detect_city_from_hotel(selected_hotel)
-                            if detected_city: st.session_state.form_data['city'] = detected_city
-                    st.success(f"Selected! City: {st.session_state.form_data.get('city', '')}")
+            selected_hotel = st.radio("Select Correct Hotel:", suggestions, index=None)
+            if selected_hotel:
+                if st.session_state.form_data.get('hotel_name') != selected_hotel:
+                    # CLEAR STATE ON MANUAL SELECTION
+                    st.session_state.form_data = {'hotel_name': selected_hotel}
+                    st.session_state.room_options = [] # Reset rooms
+                    with st.spinner("Detecting..."):
+                        st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
+                        detected_city = detect_city_from_hotel(selected_hotel)
+                        if detected_city: st.session_state.form_data['city'] = detected_city
+                st.success(f"Selected! City: {st.session_state.form_data.get('city', '')}")
 
 with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
     uploaded_file = st.file_uploader("Drop PDF here", type="pdf")
@@ -300,8 +302,10 @@ with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
         with st.spinner("Reading PDF..."):
             extracted = extract_details_from_pdf(uploaded_file)
             if extracted:
-                st.session_state.form_data = extracted # WIPE OLD DATA
+                # CLEAR STATE ON UPLOAD
+                st.session_state.form_data = extracted
                 st.session_state.last_uploaded = uploaded_file.name
+                st.session_state.room_options = [] # Reset options
                 if extracted.get('hotel_name'): st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
                 st.success("Data Extracted! Form updated.")
                 st.rerun()
@@ -312,7 +316,6 @@ with col1:
     hotel_name = st.text_input("Hotel Name", value=get_val("hotel_name", ""))
     city = st.text_input("City", value=get_val("city", "Osaka"))
     
-    # Auto-detect rooms
     extracted_rooms = get_val("rooms", [])
     default_num_rooms = len(extracted_rooms) if extracted_rooms else 1
     num_rooms = st.number_input("Number of Rooms", 1, value=default_num_rooms)
@@ -323,7 +326,6 @@ with col1:
     st.subheader("Room Details")
     if num_rooms > 1:
         for i in range(num_rooms):
-            # Pre-fill data for each room if available
             r_data = extracted_rooms[i] if i < len(extracted_rooms) else {}
             c1, c2 = st.columns(2)
             with c1:
@@ -333,7 +335,6 @@ with col1:
                 conf = st.text_input(f"Conf No (Room {i+1})", value=r_data.get('confirmation_no', get_val("confirmation_no", "")))
                 conf_numbers.append(conf)
     else:
-        # Single room mode
         r_data = extracted_rooms[0] if extracted_rooms else {}
         guest_name = st.text_input("Lead Guest Name", value=r_data.get('guest_name', get_val("guest_name", "")))
         guests_list.append(guest_name)
