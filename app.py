@@ -40,6 +40,18 @@ def get_hotel_suggestions(query):
         return json.loads(clean_text)
     except: return []
 
+def detect_city_from_hotel(hotel_name):
+    """Simple AI call to extract just the city name from a hotel name."""
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = f"""
+    What city is the hotel "{hotel_name}" located in?
+    Return ONLY the city name as a string (e.g. "Osaka", "Kyoto", "Tokyo").
+    Do not include country or state.
+    """
+    try:
+        return model.generate_content(prompt).text.strip()
+    except: return ""
+
 def get_room_types_for_hotel(hotel_name):
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
@@ -106,7 +118,7 @@ def download_image(url):
         if response.status_code == 200: return io.BytesIO(response.content)
     except: return None
 
-# --- 3. PDF GENERATION (FULL TEXT + FIXED LAYOUT) ---
+# --- 3. PDF GENERATION ---
 def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room, current_conf_no, room_index, total_rooms):
     odaduu_blue = Color(0.05, 0.15, 0.35); odaduu_orange = Color(1, 0.4, 0)
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
@@ -176,9 +188,11 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     if img_room:
         try: c.drawImage(img_room, left + img_w + 10, img_y, width=img_w, height=img_h)
         except: pass
-    y = img_y - 20
+    
+    # 1. Spacing maintained
+    y = img_y - 30 
 
-    # Policy Table (Now with GRID box)
+    # Policy Table
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y -= 15
     data_t = [["Policy", "Time / Detail"], 
               ["Standard Check-in Time:", hotel_info.get("checkin_time", "3:00 PM")], 
@@ -192,36 +206,35 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
         ('FONTSIZE',(0,0),(-1,-1),8),
         ('PADDING',(0,0),(-1,-1),3),
-        ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2)) # Adds the table box
+        ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))
     ]))
     t.wrapOn(c, width, height); t.drawOn(c, left, y - 60); y -= (60 + 15)
 
-    # T&C - FULL TEXT (Wrapped & Bullets)
+    # T&C - 2. Numbers + New Point #10
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
     
-    # The full original text list with BULLETS
     tnc_raw = [
-        "• Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
-        f"• Identification: The lead guest, {data['guest_name']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
-        "• No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
-        "• Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
-        f"• Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
-        "• Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
-        "• Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
-        "• Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
-        "• City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel."
+        "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
+        f"2. Identification: The lead guest, {data['guest_name']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
+        "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
+        "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
+        f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
+        "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
+        "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
+        "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
+        "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
+        "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
     ]
     
     c.setFillColor(text_color); c.setFont("Helvetica", 6.5)
     
     for item in tnc_raw:
-        # Wrap long lines to 130 characters so they don't run off page
         wrapped_lines = textwrap.wrap(item, width=130)
         for line in wrapped_lines:
-            if y > 50: # Check footer collision
+            if y > 50:
                 c.drawString(left, y, line)
-                y -= 8 # Line spacing
-        y -= 2 # Extra gap between items
+                y -= 8
+        y -= 2
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
@@ -261,9 +274,15 @@ if search_q:
                 if selected_hotel:
                     if st.session_state.form_data.get('hotel_name') != selected_hotel:
                         st.session_state.form_data['hotel_name'] = selected_hotel
-                        with st.spinner(f"Fetching room types for {selected_hotel}..."):
+                        
+                        # 4. AUTO DETECT CITY
+                        with st.spinner("Detecting details..."):
                             st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
-                    st.success("Selected!")
+                            detected_city = detect_city_from_hotel(selected_hotel)
+                            if detected_city:
+                                st.session_state.form_data['city'] = detected_city
+                                
+                    st.success(f"Selected! City: {st.session_state.form_data.get('city', '')}")
 
 # === 2. UPLOAD ===
 with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
@@ -327,7 +346,8 @@ with col2:
     meal_plan = st.selectbox("Meal Plan", opts, index=opts.index(def_meal) if def_meal in opts else 0)
     
     if policy_type == "Refundable":
-        days = st.number_input("Free cancel days before?", 1, 3)
+        # 3. REMOVED THE LIMIT (min_value=1, no max_value)
+        days = st.number_input("Free cancel days before?", min_value=1, value=3)
         policy_text = f"Free Cancellation until {(checkin - timedelta(days=days)).strftime('%d %b %Y')}"
         st.info(f"Voucher says: {policy_text}")
     else: policy_text = "Non-Refundable & Non-Amendable"
