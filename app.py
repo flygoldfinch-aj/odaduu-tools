@@ -28,16 +28,23 @@ except Exception:
 
 # --- 2. SESSION STATE MANAGEMENT ---
 def init_state():
+    # Initialize all keys with defaults
     defaults = {
-        'hotel_name': '', 'city': '', 'lead_guest': '', 
+        'hotel_name': '', 
+        'city': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 'room_type': '', 'adults': 2, 
+        'num_rooms': 1, 
+        'room_type': '', 
+        'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'cancel_days': 3, 
         'room_size': '',
-        'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
+        'room_options': [],
+        'suggestions': [],
+        'search_query': '', # FIXED: Added missing key to prevent crash
+        'last_uploaded_file': None,
         'policy_text_manual': ''
     }
     
@@ -52,7 +59,7 @@ def init_state():
 init_state()
 
 def reset_booking_state():
-    """Hard reset: Wipes all data to prevent 'Sticky Data' bugs."""
+    """Hard reset of all data fields."""
     st.session_state.hotel_name = ''
     st.session_state.city = ''
     st.session_state.num_rooms = 1
@@ -67,9 +74,10 @@ def reset_booking_state():
         st.session_state[f'room_{i}_guest'] = ''
         st.session_state[f'room_{i}_conf'] = ''
     
-    # Wipe Search Bar Widget
+    # FIXED: Clear the Search Bar Widget
     if 'search_input' in st.session_state:
-        st.session_state['search_input'] = ""
+        st.session_state.search_input = ""
+    st.session_state.search_query = ""
 
 # --- 3. AI FUNCTIONS ---
 
@@ -98,11 +106,13 @@ def extract_pdf_data(pdf_file):
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
         model = genai.GenerativeModel('gemini-2.0-flash')
+        # UPDATED PROMPT: Better handling of line-breaks in Room Types
         prompt = f"""
-        Extract booking details from this text.
-        CRITICAL 1: Look for "Room 1", "Room 2" etc.
-        CRITICAL 2: Read the Cancellation Policy text carefully.
-        CRITICAL 3: Extract exact room type names.
+        Extract booking details.
+        
+        CRITICAL 1: Look for "Room 1", "Room 2".
+        CRITICAL 2: The Room Type often appears on the line BELOW the label "Room Type" or "Confirmation #". Capture the full string (e.g. "Heritage Kutiya").
+        CRITICAL 3: Read Cancellation Policy carefully.
         
         Text Snippet: {text[:25000]}
         
@@ -276,7 +286,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     if up_file:
         if st.session_state.last_uploaded_file != up_file.name:
             with st.spinner("Processing New File..."):
-                reset_booking_state() # HARD RESET
+                reset_booking_state() # WIPE OLD DATA INCLUDING SEARCH BAR
                 
                 data = extract_pdf_data(up_file)
                 if data:
@@ -294,7 +304,9 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
+                        # Fix: Take the specific room type from the extraction
                         st.session_state.room_type = rooms[0].get('room_type', '')
+                        
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                             st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
