@@ -13,7 +13,7 @@ from reportlab.lib.utils import ImageReader
 import pypdf
 import textwrap
 from math import sin, cos, radians
-import re 
+import re
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -122,12 +122,12 @@ def extract_pdf_data(pdf_file):
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
         model = genai.GenerativeModel('gemini-2.0-flash')
+        # Prompt changed to ask for RAW DATE STRINGS to be handled by Python cleaner
         prompt = f"""
         Extract booking details.
         
-        CRITICAL: Return DATES exactly as they appear (e.g. "28 Sept 2025"). Do NOT convert them.
+        CRITICAL: Return DATES exactly as they appear (e.g. "28 Sept 2025"). Do NOT convert them to YYYY-MM-DD.
         CRITICAL: Look for "Room 1", "Room 2".
-        CRITICAL: Look for "Free Cancellation until [Date]".
         
         Text Snippet: {text[:25000]}
         
@@ -139,7 +139,6 @@ def extract_pdf_data(pdf_file):
             "meal_plan": "Plan", 
             "is_refundable": true/false, 
             "cancel_deadline_raw": "Raw Deadline Date String (if found)",
-            "cancellation_text": "Original policy text found",
             "room_size": "Size string",
             "rooms": [
                 {{"guest_name": "Guest 1", "confirmation_no": "Conf 1", "room_type": "Type 1", "adults": 2}},
@@ -309,9 +308,14 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     st.session_state.hotel_name = data.get('hotel_name', '')
                     st.session_state.city = data.get('city', '')
                     
-                    # DATE PARSING FIX: Using smart date parser on raw AI output
+                    # DATE PARSING FIX (Using smart date parser on raw AI output)
                     d_in = parse_smart_date(data.get('checkin_raw'))
                     d_out = parse_smart_date(data.get('checkout_raw'))
+                    
+                    # CRITICAL FIX: DATE SWAPPING LOGIC
+                    if d_in and d_out and d_in > d_out:
+                        d_in, d_out = d_out, d_in
+                        
                     if d_in: st.session_state.checkin = d_in
                     if d_out: st.session_state.checkout = d_out
                     
@@ -339,7 +343,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         dead_date = parse_smart_date(dead_raw)
                         if dead_date:
                             st.session_state.policy_type = 'Refundable'
-                            st.session_state.policy_text_manual = ''
+                            st.session_state.policy_text_manual = '' 
                             
                             delta = (st.session_state.checkin - dead_date).days
                             st.session_state.cancel_days = max(1, delta)
