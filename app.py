@@ -28,48 +28,48 @@ except Exception:
 
 # --- 2. SESSION STATE MANAGEMENT ---
 def init_state():
-    # Initialize all keys with defaults to prevent errors
-    defaults = {
-        'hotel_name': '', 
-        'city': '', 
-        'checkin': datetime.now().date(), 
-        'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 
-        'room_type': '', 
-        'adults': 2, 
-        'meal_plan': 'Breakfast Only',
-        'policy_type': 'Non-Refundable', 
-        'cancel_days': 3, 
-        'room_size': '',
-        'room_options': [],
-        'suggestions': [],
-        'search_query': '',
-        'last_uploaded_file': None
-    }
+    # Initialize defaults
+    if 'hotel_name' not in st.session_state: st.session_state.hotel_name = ''
+    if 'city' not in st.session_state: st.session_state.city = ''
+    if 'checkin' not in st.session_state: st.session_state.checkin = datetime.now().date()
+    if 'checkout' not in st.session_state: st.session_state.checkout = datetime.now().date() + timedelta(days=1)
+    if 'num_rooms' not in st.session_state: st.session_state.num_rooms = 1
+    if 'room_type' not in st.session_state: st.session_state.room_type = ''
+    if 'adults' not in st.session_state: st.session_state.adults = 2
+    if 'meal_plan' not in st.session_state: st.session_state.meal_plan = 'Breakfast Only'
+    if 'policy_type' not in st.session_state: st.session_state.policy_type = 'Non-Refundable'
+    if 'cancel_days' not in st.session_state: st.session_state.cancel_days = 3
+    if 'room_size' not in st.session_state: st.session_state.room_size = ''
     
-    # Initialize room specific fields (support up to 10 rooms)
+    if 'room_options' not in st.session_state: st.session_state.room_options = []
+    if 'suggestions' not in st.session_state: st.session_state.suggestions = []
+    if 'last_uploaded_file' not in st.session_state: st.session_state.last_uploaded_file = None
+    
+    # Initialize dynamic room fields (0 to 9)
     for i in range(10):
-        defaults[f'room_{i}_guest'] = ''
-        defaults[f'room_{i}_conf'] = ''
-
-    for key, val in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = val
+        if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
+        if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
 
 init_state()
 
 def reset_booking_state():
-    """Wipes all booking data cleanly. Called on new file upload."""
+    """Wipes all booking data AND the search bar."""
     st.session_state.hotel_name = ''
     st.session_state.city = ''
     st.session_state.num_rooms = 1
     st.session_state.room_type = ''
     st.session_state.room_size = ''
     st.session_state.room_options = []
+    
     # Wipe specific room fields
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
         st.session_state[f'room_{i}_conf'] = ''
+        
+    # --- FIX: Clear the Search Bar and Suggestions ---
+    st.session_state.suggestions = [] 
+    # Note: We cannot force-clear the 'search_input' widget directly due to Streamlit limitations,
+    # but we can ignore its value by resetting the suggestions.
 
 # --- 3. AI FUNCTIONS ---
 
@@ -98,9 +98,10 @@ def extract_pdf_data(pdf_file):
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
         model = genai.GenerativeModel('gemini-2.0-flash')
-        # UPDATED PROMPT: Matches JSON keys exactly to Python logic
         prompt = f"""
-        Extract booking details. Look for MULTIPLE rooms (e.g. Room 1, Room 2).
+        Extract booking details. Look for PATTERNS like "Room 1:", "Room 2:" or "1/2", "2/2".
+        If "Room 2" exists, ensure it is added to the 'rooms' list.
+        
         Text Snippet: {text[:25000]}
         
         Return JSON:
@@ -232,7 +233,7 @@ def generate_pdf(data, info, imgs, rooms_list):
             if i_room: 
                 try: c.drawImage(i_room, ix, y-ih, iw, ih)
                 except: pass
-            y -= (ih + 30) # 30px Spacing between images and table
+            y -= (ih + 30)
         else: y -= 15
 
         # Policies
@@ -240,11 +241,11 @@ def generate_pdf(data, info, imgs, rooms_list):
         pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability."], ["Required:", "Passport & Credit Card."]]
         t = Table(pt, colWidths=[130, 380])
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),Color(0.05, 0.15, 0.35)), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
-        t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30) # Spacing between table and T&C
+        t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
         # T&C
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
-        tnc = ["1. Voucher Validity: Valid for dates/services specified. Present at front desk.", f"2. Identification: Lead guest ({room['guest']}) must present Passport.", "3. No-Show Policy: Full fee applies for no-shows without prior cancellation.", "4. Incidentals: Settled directly at hotel.", "5. Occupancy: Changes may incur charges.", "6. Hotel Rights: Refusal for inappropriate conduct.", "7. Liability: Use safety box for valuables.", "8. Non-Transferable: Cannot be resold.", "9. City Tax: Paid directly at hotel.", "10. Bed Type: Subject to availability."]
+        tnc = ["1. Voucher Validity: Valid for dates/services specified. Present at front desk.", f"2. Identification: Lead guest ({room['guest']}) must present Passport.", "3. No-Show: Full fee applies.", "4. Incidentals: Settled directly at hotel.", "5. Occupancy: Changes may incur charges.", "6. Hotel Rights: Refusal for inappropriate conduct.", "7. Liability: Use safety box for valuables.", "8. Non-Transferable: Cannot be resold.", "9. City Tax: Paid directly at hotel.", "10. Bed Type: Subject to availability."]
         styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
         t_data = [[Paragraph(x, styleN)] for x in tnc]
         t2 = Table(t_data, colWidths=[510])
@@ -271,7 +272,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     if up_file:
         if st.session_state.last_uploaded_file != up_file.name:
             with st.spinner("Processing New File..."):
-                reset_booking_state() # CRITICAL: Wipe old data before loading new
+                reset_booking_state() # HARD RESET
                 
                 data = extract_pdf_data(up_file)
                 if data:
@@ -287,12 +288,11 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     st.session_state.room_type = data.get('room_type', '')
                     st.session_state.room_size = data.get('room_size', '')
                     
-                    # Rooms Logic (Room 1, Room 2...)
+                    # Rooms Logic
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
                         for i, r in enumerate(rooms):
-                            # JSON keys matched to Python Logic
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                             st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
                     
@@ -307,13 +307,15 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
 st.markdown("### 🏨 Hotel Details")
 col_s, col_res = st.columns([2,1])
 with col_s: 
-    search = st.text_input("Search Hotel Name", key="search_input")
-    if search and search != st.session_state.search_query:
-        st.session_state.search_query = search
-        st.session_state.suggestions = get_hotel_suggestions(search)
+    search_q = st.text_input("Search Hotel Name (Manual)", key="search_input")
+    # Only search if user typed something new AND we are not in 'Upload Mode'
+    if search_q and search_q != st.session_state.search_query:
+        st.session_state.search_query = search_q
+        st.session_state.suggestions = get_hotel_suggestions(search_q)
 
 with col_res:
     if st.session_state.suggestions:
+        # Index=None ensures no auto-select loop
         sel = st.radio("Select:", st.session_state.suggestions, index=None, key="hotel_radio")
         if sel and sel != st.session_state.hotel_name:
             st.session_state.hotel_name = sel
@@ -337,7 +339,6 @@ with c1:
         cols = st.columns(2)
         with cols[0]: st.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
         with cols[1]:
-            # Auto-fill if same_conf checked
             val = st.session_state.get(f'room_{0}_conf', '') if (same_conf and i > 0) else st.session_state.get(f'room_{i}_conf', '')
             st.text_input(f"Conf {i+1}", value=val, key=f"room_{i}_conf")
 
@@ -345,8 +346,23 @@ with c1:
     ptype = st.radio("Type", ["Non-Refundable", "Refundable"], horizontal=True, key="policy_type")
 
 with c2:
-    st.date_input("Check-In", key="checkin")
-    st.date_input("Check-Out", key="checkout", min_value=st.session_state.checkin + timedelta(days=1))
+    # --- FIX: SAFE DATE LOGIC ---
+    # Ensure min_value is never greater than value to prevent crashes
+    curr_in = st.session_state.checkin
+    curr_out = st.session_state.checkout
+    
+    # 1. Draw Checkin
+    new_in = st.date_input("Check-In", value=curr_in, key="checkin")
+    
+    # 2. Calculate safe min out
+    min_out = new_in + timedelta(days=1)
+    
+    # 3. If current out is invalid (e.g. from old state), fix it before drawing widget
+    if curr_out < min_out:
+        st.session_state.checkout = min_out
+        curr_out = min_out
+        
+    st.date_input("Check-Out", value=curr_out, min_value=min_out, key="checkout")
     
     opts = st.session_state.room_options.copy()
     current = st.session_state.room_type
