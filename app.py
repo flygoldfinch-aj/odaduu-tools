@@ -33,7 +33,11 @@ def init_state():
         'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 'room_type': '', 'adults': 2, 
+        'num_rooms': 1, 
+        'room_type': '', # Final room type value (standard or manual)
+        'room_manual_text': '', # Text input value when manual is selected
+        'room_sel': '', # Selected value of the dropdown (including 'Manual...')
+        'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'cancel_days': 3, 
@@ -59,6 +63,8 @@ def reset_booking_state():
     st.session_state.city = ''
     st.session_state.num_rooms = 1
     st.session_state.room_type = ''
+    st.session_state.room_manual_text = ''
+    st.session_state.room_sel = ''
     st.session_state.room_size = ''
     st.session_state.room_options = []
     st.session_state.policy_text_manual = ''
@@ -353,7 +359,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         dead_date = parse_smart_date(dead_raw)
                         if dead_date:
                             st.session_state.policy_type = 'Refundable'
-                            st.session_state.policy_text_manual = '' # Reset to use calculator
+                            st.session_state.policy_text_manual = '' # Force calculator logic
                             
                             delta = (st.session_state.checkin - dead_date).days
                             st.session_state.cancel_days = max(1, delta)
@@ -427,7 +433,11 @@ with c2:
             
     idx = 0
     if current in opts: idx = opts.index(current)
-        
+    
+    # FINAL FIX: Set selectbox key value to ensure correct initial selection
+    if st.session_state.room_type and st.session_state.room_type != st.session_state.room_sel:
+        st.session_state.room_sel = st.session_state.room_type
+
     st.selectbox("Room Type", opts, index=idx, key="room_sel", on_change=on_room_change)
     if st.session_state.get("room_sel") == "Manual...": st.text_input("Type Name", key="room_type")
     
