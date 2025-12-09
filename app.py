@@ -65,7 +65,7 @@ def extract_details_from_pdf(pdf_file):
             
         model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = f"""
-        Extract booking details. Look for MULTIPLE rooms if present.
+        Analyze this booking text. It might contain MULTIPLE rooms (Room 1, Room 2, etc.).
         Text: {text[:15000]}
         
         Return JSON Structure:
@@ -80,9 +80,15 @@ def extract_details_from_pdf(pdf_file):
             "room_size": "Size string if found",
             "rooms": [
                 {{
-                    "guest_name": "Lead Name Room 1",
-                    "room_type": "Type Room 1",
-                    "confirmation_no": "Ref Room 1",
+                    "guest_name": "Name for Room 1",
+                    "room_type": "Type for Room 1",
+                    "confirmation_no": "Ref for Room 1",
+                    "adults": 2
+                }},
+                {{
+                    "guest_name": "Name for Room 2 (if exists)",
+                    "room_type": "Type for Room 2",
+                    "confirmation_no": "Ref for Room 2",
                     "adults": 2
                 }}
             ]
@@ -155,16 +161,14 @@ def draw_vector_seal(c, x, y, size):
     draw_text_on_arc(c, "OFFICIAL", cx, cy, r_text, 230, 310, font_size=7, flip=True)
     c.restoreState()
 
-def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobby, img_room, current_conf_no, room_index, total_rooms):
+def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobby, img_room, current_conf_no, current_guest, room_index, total_rooms):
     odaduu_blue = Color(0.05, 0.15, 0.35); odaduu_orange = Color(1, 0.4, 0)
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
     left = 40; center_x = width / 2
     
-    # Watermark
     try: c.saveState(); c.setFillAlpha(0.04); c.drawImage("logo.png", center_x - 200, height/2 - 75, width=400, height=150, mask='auto', preserveAspectRatio=True); c.restoreState()
     except: pass
 
-    # Header
     try: c.drawImage("logo.png", center_x - 80, height - 60, width=160, height=55, mask='auto', preserveAspectRatio=True)
     except: c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(center_x, height - 50, "ODADUU TRAVEL DMC")
 
@@ -178,10 +182,9 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobb
         c.drawString(left + 120, y, str(val)); return y - 12
 
     y = height - 120
-    # Sections
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Guest Information")
     y -= 5; c.setStrokeColor(lightgrey); c.line(left, y, width-40, y); y -= 12
-    y = row(y, "Guest Name:", data['guest_name'], True)
+    y = row(y, "Guest Name:", current_guest, True)
     y = row(y, "Confirmation No.:", current_conf_no, True)
     y = row(y, "Booking Date:", datetime.now().strftime("%d %b %Y"))
     y -= 5
@@ -237,7 +240,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobb
 
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
     tnc_raw = ["1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
-        f"2. Identification: The lead guest, {data['guest_name']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
+        f"2. Identification: The lead guest, {current_guest}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
         "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
         "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
         f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
@@ -257,11 +260,14 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobb
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Odaduu Travel DMC")
     c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: aashwin@odaduu.jp")
 
-def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_lobby_url, img_room_url, conf_numbers_list):
+def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_lobby_url, img_room_url, conf_numbers_list, guests_list):
     buffer = io.BytesIO(); c = canvas.Canvas(buffer, pagesize=A4); width, height = A4
     img_ext = get_safe_image_reader(img_exterior_url); img_lobby = get_safe_image_reader(img_lobby_url); img_room = get_safe_image_reader(img_room_url)
+    
     for i, conf in enumerate(conf_numbers_list):
-        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_lobby, img_room, conf, i+1, len(conf_numbers_list)); c.showPage()
+        current_guest = guests_list[i] if i < len(guests_list) else guests_list[0]
+        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_lobby, img_room, conf, current_guest, i+1, len(conf_numbers_list))
+        c.showPage()
     c.save(); buffer.seek(0); return buffer
 
 # --- 4. UI LOGIC ---
@@ -281,9 +287,8 @@ if search_q:
                 selected_hotel = st.radio("Select Correct Hotel:", suggestions)
                 if selected_hotel:
                     if st.session_state.form_data.get('hotel_name') != selected_hotel:
-                        # Clear old data when switching hotels manually
-                        st.session_state.form_data = {'hotel_name': selected_hotel}
-                        with st.spinner("Detecting details..."):
+                        st.session_state.form_data = {'hotel_name': selected_hotel} # WIPE OLD DATA
+                        with st.spinner("Detecting..."):
                             st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
                             detected_city = detect_city_from_hotel(selected_hotel)
                             if detected_city: st.session_state.form_data['city'] = detected_city
@@ -295,16 +300,11 @@ with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
         with st.spinner("Reading PDF..."):
             extracted = extract_details_from_pdf(uploaded_file)
             if extracted:
-                # WIPE old data, replace with new extraction
-                st.session_state.form_data = extracted
+                st.session_state.form_data = extracted # WIPE OLD DATA
                 st.session_state.last_uploaded = uploaded_file.name
-                
-                # Fetch rooms for new hotel
-                if extracted.get('hotel_name'): 
-                    st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
-                
+                if extracted.get('hotel_name'): st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
                 st.success("Data Extracted! Form updated.")
-                st.rerun() # Force UI refresh
+                st.rerun()
 
 st.markdown("### 📝 2. Booking Details")
 col1, col2 = st.columns(2)
@@ -312,31 +312,33 @@ with col1:
     hotel_name = st.text_input("Hotel Name", value=get_val("hotel_name", ""))
     city = st.text_input("City", value=get_val("city", "Osaka"))
     
-    # Guest Name Handling (From Room 1)
-    rooms_data = get_val("rooms", [])
-    default_guest = rooms_data[0]['guest_name'] if rooms_data else get_val("guest_name", "")
-    guest_name = st.text_input("Lead Guest Name", value=default_guest)
-    
-    st.subheader("Room Details")
-    # Auto-detect number of rooms
-    default_num = len(rooms_data) if rooms_data else 1
-    num_rooms = st.number_input("Number of Rooms", 1, value=default_num)
+    # Auto-detect rooms
+    extracted_rooms = get_val("rooms", [])
+    default_num_rooms = len(extracted_rooms) if extracted_rooms else 1
+    num_rooms = st.number_input("Number of Rooms", 1, value=default_num_rooms)
     
     conf_numbers = []
+    guests_list = []
     
+    st.subheader("Room Details")
     if num_rooms > 1:
-        if st.checkbox("Same Confirmation No?", False): # Default false for multi-room
-            main_conf = st.text_input("Confirmation No (All)", value="")
-            conf_numbers = [main_conf] * num_rooms
-        else:
-            for i in range(num_rooms):
-                # Pre-fill from extracted data if available
-                val = rooms_data[i]['confirmation_no'] if i < len(rooms_data) else ""
-                conf_numbers.append(st.text_input(f"Room {i+1} Conf No", value=val))
+        for i in range(num_rooms):
+            # Pre-fill data for each room if available
+            r_data = extracted_rooms[i] if i < len(extracted_rooms) else {}
+            c1, c2 = st.columns(2)
+            with c1:
+                g_name = st.text_input(f"Guest Name (Room {i+1})", value=r_data.get('guest_name', get_val("guest_name", "")))
+                guests_list.append(g_name)
+            with c2:
+                conf = st.text_input(f"Conf No (Room {i+1})", value=r_data.get('confirmation_no', get_val("confirmation_no", "")))
+                conf_numbers.append(conf)
     else:
-        # Single room pre-fill
-        val = rooms_data[0]['confirmation_no'] if rooms_data else get_val("confirmation_no", "")
-        conf_numbers.append(st.text_input("Confirmation No", value=val))
+        # Single room mode
+        r_data = extracted_rooms[0] if extracted_rooms else {}
+        guest_name = st.text_input("Lead Guest Name", value=r_data.get('guest_name', get_val("guest_name", "")))
+        guests_list.append(guest_name)
+        conf = st.text_input("Confirmation No", value=r_data.get('confirmation_no', get_val("confirmation_no", "")))
+        conf_numbers.append(conf)
 
     st.subheader("Policy")
     def_pol = "Refundable" if get_val("is_refundable", False) else "Non-Refundable"
@@ -354,14 +356,12 @@ with col2:
     if d_out_def <= checkin: d_out_def = min_out
     checkout = st.date_input("Check-Out", value=d_out_def, min_value=min_out)
     
-    # Room Type (Try to match extracted type)
-    current_room_val = rooms_data[0]['room_type'] if rooms_data else get_val("room_type", "")
+    current_room_val = extracted_rooms[0].get('room_type') if extracted_rooms else get_val("room_type", "")
     options = st.session_state.room_options.copy()
     if current_room_val and current_room_val not in options: options.insert(0, current_room_val)
     options.append("Type Manually...")
     sel_room = st.selectbox("Room Type", options)
     room_type = st.text_input("Enter Room Name", "") if sel_room == "Type Manually..." else sel_room
-    
     adults = st.number_input("Adults", 1, value=get_val("adults", 2))
     room_size = st.text_input("Room Size (Optional - e.g. 35 sqm)", value=get_val("room_size", ""), help="Leave blank to hide in PDF")
     opts = ["Breakfast Only", "Room Only", "Half Board", "Full Board"]
@@ -383,10 +383,10 @@ if st.button("✨ Generate Voucher", type="primary"):
             img_lobby = fetch_image_url(f"{hotel_name} {city} hotel lobby")
             img_room = fetch_image_url(f"{hotel_name} {city} {room_type} interior")
             
-            data = {"hotel_name": hotel_name, "guest_name": guest_name, "checkin": checkin, "checkout": checkout, 
+            data = {"hotel_name": hotel_name, "guest_name": guests_list[0], "checkin": checkin, "checkout": checkout, 
                     "room_type": room_type, "adults": adults, "meal_plan": meal_plan, 
                     "policy_text": policy_text, "room_size": room_size}
-            pdf = generate_multipage_pdf(data, info, img_ext, img_lobby, img_room, conf_numbers)
+            pdf = generate_multipage_pdf(data, info, img_ext, img_lobby, img_room, conf_numbers, guests_list)
             
         st.success("✅ Voucher Generated Successfully!")
-        st.download_button("⬇️ Download PDF", pdf, f"Voucher_{guest_name.replace(' ','_')}.pdf", "application/pdf", type="primary")
+        st.download_button("⬇️ Download PDF", pdf, f"Voucher_{guests_list[0].replace(' ','_')}.pdf", "application/pdf", type="primary")
