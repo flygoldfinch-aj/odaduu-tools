@@ -33,18 +33,15 @@ def init_state():
         'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 
-        'room_type': '', # Final room type value (standard or manual)
-        'room_manual_text': '', # Text input value when manual is selected
-        'room_sel': '', # Selected value of the dropdown (including 'Manual...')
-        'adults': 2, 
+        'num_rooms': 1, 'room_type': '', 'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'cancel_days': 3, 
         'room_size': '',
         'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
         'policy_text_manual': '',
-        'search_query': ''
+        'search_query': '',
+        'room_sel': ''
     }
     
     for i in range(10):
@@ -63,12 +60,11 @@ def reset_booking_state():
     st.session_state.city = ''
     st.session_state.num_rooms = 1
     st.session_state.room_type = ''
-    st.session_state.room_manual_text = ''
-    st.session_state.room_sel = ''
     st.session_state.room_size = ''
     st.session_state.room_options = []
     st.session_state.policy_text_manual = ''
     st.session_state.suggestions = []
+    st.session_state.room_sel = '' 
     
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
@@ -434,7 +430,7 @@ with c2:
     idx = 0
     if current in opts: idx = opts.index(current)
     
-    # FINAL FIX: Set selectbox key value to ensure correct initial selection
+    # FINAL FIX: Initialize selectbox key value to ensure correct initial selection
     if st.session_state.room_type and st.session_state.room_type != st.session_state.room_sel:
         st.session_state.room_sel = st.session_state.room_type
 
