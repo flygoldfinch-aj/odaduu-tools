@@ -1,3 +1,24 @@
+Yes, that is a great addition to speed things up.
+
+We can use Gemini to fetch the **standard room inventory** for the selected hotel (e.g., "Superior", "Deluxe", "Club Mirage", "Corner Suite") and populate a dropdown.
+
+**⚠️ Important Note:** The AI knows the *marketing names* of the rooms (e.g., "Deluxe King"), but it cannot see "Live Inventory" (it doesn't know if the room is sold out today).
+
+Here is the updated **`app.py`**.
+
+### **What is New?**
+
+1.  **Room Type Dropdown:** As soon as you select a hotel, the AI fetches the room list.
+2.  **"Other" Option:** If the specific B2B room name isn't listed (e.g., "Promo Rate Deluxe"), you can select "Type Manually..." to write it yourself.
+3.  **PDF Auto-Match:** If you upload a PDF, the tool attempts to match the PDF's room text to the dropdown automatically.
+
+-----
+
+### **The Final Code**
+
+Copy and replace your entire `app.py` with this.
+
+````python
 import streamlit as st
 import google.generativeai as genai
 import requests
@@ -40,6 +61,20 @@ def get_hotel_suggestions(query):
         return json.loads(clean_text)
     except: return []
 
+def get_room_types_for_hotel(hotel_name):
+    """Fetches list of room categories for a specific hotel."""
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = f"""
+    List 10 common room category names for the hotel: "{hotel_name}".
+    Examples: "Superior Room", "Deluxe King", "Junior Suite", "Standard Twin".
+    Return ONLY a JSON list of strings.
+    """
+    try:
+        response = model.generate_content(prompt)
+        clean_text = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_text)
+    except: return []
+
 def extract_details_from_pdf(pdf_file):
     try:
         pdf_reader = pypdf.PdfReader(pdf_file)
@@ -58,7 +93,7 @@ def extract_details_from_pdf(pdf_file):
             "checkout_date": "YYYY-MM-DD", "room_type": "Type",
             "adults": 2, "meal_plan": "Plan",
             "is_refundable": true/false, "cancel_deadline": "YYYY-MM-DD",
-            "room_size": "Size string if found (e.g. 35 sqm)" 
+            "room_size": "Size string if found"
         }}
         """
         return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
@@ -151,11 +186,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     y = row(y, "Room Type:", data['room_type'])
     y = row(y, "No. of Pax:", f"{data['adults']} Adults")
     y = row(y, "Meal Plan:", data['meal_plan'])
-    
-    # --- LOGIC: Only show Room Size if user entered it ---
-    if data.get('room_size'):
-        y = row(y, "Room Size:", data['room_size'])
-        
+    if data.get('room_size'): y = row(y, "Room Size:", data['room_size'])
     y = row(y, "Cancellation:", data['policy_text'], "Refundable" in data['policy_text'])
     y -= 8
 
@@ -204,15 +235,17 @@ def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_room_url, con
 
 # --- 4. UI LOGIC ---
 if 'form_data' not in st.session_state: st.session_state.form_data = {}
+if 'room_options' not in st.session_state: st.session_state.room_options = []
+
 def get_val(k, d): return st.session_state.form_data.get(k, d)
 
 st.title("🏯 Odaduu Voucher Generator")
 
-# === SMART SEARCH ===
-st.markdown("### 🏨 Find Hotel (Auto-Correct)")
+# === 1. SMART HOTEL SEARCH ===
+st.markdown("### 🏨 1. Find Hotel")
 col_search, col_res = st.columns([2, 1])
 with col_search:
-    search_q = st.text_input("Type partial hotel name & press Enter (e.g. 'Centara Osaka')", key="search_box")
+    search_q = st.text_input("Type partial hotel name & press Enter", key="search_box")
 if search_q:
     with col_res:
         with st.spinner("Finding..."):
@@ -220,10 +253,14 @@ if search_q:
             if suggestions:
                 selected_hotel = st.radio("Select Correct Hotel:", suggestions)
                 if selected_hotel:
-                    st.session_state.form_data['hotel_name'] = selected_hotel
+                    # Only fetch rooms if hotel changed
+                    if st.session_state.form_data.get('hotel_name') != selected_hotel:
+                        st.session_state.form_data['hotel_name'] = selected_hotel
+                        with st.spinner(f"Fetching room types for {selected_hotel}..."):
+                            st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
                     st.success("Selected!")
 
-# === UPLOAD ===
+# === 2. UPLOAD ===
 with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
     uploaded_file = st.file_uploader("Drop PDF here", type="pdf")
     if uploaded_file and st.session_state.get('last_uploaded') != uploaded_file.name:
@@ -232,10 +269,13 @@ with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
             if extracted:
                 st.session_state.form_data.update(extracted)
                 st.session_state.last_uploaded = uploaded_file.name
+                # Trigger room fetch for uploaded hotel too
+                if extracted.get('hotel_name'):
+                    st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
                 st.success("Data Extracted!")
 
-# === FORM ===
-st.markdown("### 📝 Booking Details")
+# === 3. DETAILS FORM ===
+st.markdown("### 📝 2. Booking Details")
 col1, col2 = st.columns(2)
 with col1:
     hotel_name = st.text_input("Hotel Name", value=get_val("hotel_name", ""))
@@ -266,13 +306,27 @@ with col2:
     
     checkin = st.date_input("Check-In", value=d_in)
     checkout = st.date_input("Check-Out", value=d_out)
-    room_type = st.text_input("Room Type", value=get_val("room_type", ""))
-    adults = st.number_input("Adults", 1, value=get_val("adults", 2))
     
-    # --- MANUAL ROOM SIZE INPUT ---
-    # Using .get() ensures it doesn't crash if the key is missing
-    room_size_val = get_val("room_size", "")
-    room_size = st.text_input("Room Size (Optional - e.g. 35 sqm)", value=room_size_val, help="Leave blank to hide this line in the PDF")
+    # --- ROOM TYPE DROPDOWN LOGIC ---
+    current_room_val = get_val("room_type", "")
+    
+    # Prepare options: Fetched list + "Type Manually..." + Current Value (if from PDF)
+    options = st.session_state.room_options.copy()
+    if current_room_val and current_room_val not in options:
+        options.insert(0, current_room_val) # Put PDF value at top
+    options.append("Type Manually...")
+    
+    selected_room_option = st.selectbox("Room Type Selection", options)
+    
+    if selected_room_option == "Type Manually...":
+        room_type = st.text_input("Enter Room Type Manually", value="")
+    else:
+        room_type = selected_room_option
+        # Hidden input to keep state consistent if they switch back
+        # st.session_state.form_data['room_type'] = room_type 
+
+    adults = st.number_input("Adults", 1, value=get_val("adults", 2))
+    room_size = st.text_input("Room Size (Optional - e.g. 35 sqm)", value=get_val("room_size", ""), help="Leave blank to hide in PDF")
     
     opts = ["Breakfast Only", "Room Only", "Half Board", "Full Board"]
     def_meal = get_val("meal_plan", "Breakfast Only")
@@ -296,8 +350,9 @@ if st.button("✨ Generate Voucher", type="primary"):
             
             data = {"hotel_name": hotel_name, "guest_name": guest_name, "checkin": checkin, "checkout": checkout, 
                     "room_type": room_type, "adults": adults, "meal_plan": meal_plan, 
-                    "policy_text": policy_text, "room_size": room_size} # Pass room_size
+                    "policy_text": policy_text, "room_size": room_size}
             pdf = generate_multipage_pdf(data, info, img_ext, img_room, conf_numbers)
             
             status.update(label="Done!", state="complete")
             st.download_button("⬇️ Download PDF", pdf, f"Voucher_{guest_name.replace(' ','_')}.pdf", "application/pdf")
+````
