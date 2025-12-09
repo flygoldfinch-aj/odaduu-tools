@@ -137,16 +137,12 @@ def draw_text_on_arc(c, text, cx, cy, radius, start_angle, end_angle, font_size=
     current_angle = start_angle
     for char in text:
         c.saveState()
-        # Calculate position on circle
         theta = radians(current_angle)
         x_pos = radius * cos(theta)
         y_pos = radius * sin(theta)
         c.translate(x_pos, y_pos)
-        
-        # Rotate character to align with tangent
         rot_angle = current_angle - 90 if not flip else current_angle + 90
         c.rotate(rot_angle)
-        
         c.drawCentredString(0, 0, char)
         c.restoreState()
         current_angle += angle_step
@@ -155,8 +151,6 @@ def draw_text_on_arc(c, text, cx, cy, radius, start_angle, end_angle, font_size=
 def draw_vector_seal(c, x, y, size):
     """Draws a vector seal with arced text and central text."""
     c.saveState()
-    
-    # Seal style (dark blue, semi-transparent)
     seal_color = Color(0.1, 0.2, 0.4)
     c.setStrokeColor(seal_color)
     c.setFillColor(seal_color)
@@ -164,33 +158,25 @@ def draw_vector_seal(c, x, y, size):
     c.setStrokeAlpha(0.8)
     c.setLineWidth(1.5)
 
-    # Geometry
     cx, cy = x + size / 2, y + size / 2
     r_outer = size / 2
     r_inner = r_outer - 4
-    r_text = r_inner - 7 # Baseline radius for arced text
+    r_text = r_inner - 7
 
-    # Draw Rings
     c.circle(cx, cy, r_outer, stroke=1, fill=0)
     c.setLineWidth(0.5)
     c.circle(cx, cy, r_inner, stroke=1, fill=0)
 
-    # --- Center Text (ODADUU TRAVEL DMC) ---
     c.setFont("Helvetica-Bold", 10)
     c.drawCentredString(cx, cy + 4, "ODADUU")
     c.setFont("Helvetica-Bold", 7)
     c.drawCentredString(cx, cy - 6, "TRAVEL DMC")
 
-    # --- Arced Text ---
-    # Top Arc: "CERTIFIED VOUCHER"
     draw_text_on_arc(c, "CERTIFIED VOUCHER", cx, cy, r_text, 150, 30, font_size=7)
-
-    # Bottom Arc: "OFFICIAL", flipped
     draw_text_on_arc(c, "OFFICIAL", cx, cy, r_text, 230, 310, font_size=7, flip=True)
-
     c.restoreState()
 
-def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room, current_conf_no, room_index, total_rooms):
+def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_lobby, img_room, current_conf_no, room_index, total_rooms):
     odaduu_blue = Color(0.05, 0.15, 0.35); odaduu_orange = Color(1, 0.4, 0)
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
     left = 40; center_x = width / 2
@@ -251,15 +237,27 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     y = row(y, "Cancellation:", data['policy_text'], "Refundable" in data['policy_text'])
     y -= 5
 
-    # Images
-    if img_exterior or img_room:
-        img_h = 95; img_w = 180; img_y = y - img_h
+    # Images - UPDATED FOR 3 IMAGES
+    if img_exterior or img_lobby or img_room:
+        img_h = 95; img_w = 160; spacing = 10
+        img_y = y - img_h
+        
+        current_x = left
         if img_exterior:
-            try: c.drawImage(img_exterior, left, img_y, width=img_w, height=img_h)
+            try:
+                c.drawImage(img_exterior, current_x, img_y, width=img_w, height=img_h)
+                current_x += img_w + spacing
+            except: pass
+        if img_lobby:
+            try:
+                c.drawImage(img_lobby, current_x, img_y, width=img_w, height=img_h)
+                current_x += img_w + spacing
             except: pass
         if img_room:
-            try: c.drawImage(img_room, left + img_w + 10, img_y, width=img_w, height=img_h)
+            try:
+                c.drawImage(img_room, current_x, img_y, width=img_w, height=img_h)
             except: pass
+            
         y = img_y - 35
     else:
         y -= 15
@@ -318,25 +316,26 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     t_tnc.drawOn(c, left, y - h_tnc)
 
     # --- NEW: VECTOR AUTHENTICATION SEAL WITH ARCED TEXT ---
-    # Draws the seal directly onto the PDF.
-    # Moved down by changing y from 65 to 62.
-    draw_vector_seal(c, width - 130, 62, 80)
+    draw_vector_seal(c, width - 130, 45, 80)
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Odaduu Travel DMC")
     c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: aashwin@odaduu.jp")
 
-def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_room_url, conf_numbers_list):
+def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_lobby_url, img_room_url, conf_numbers_list):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     
+    # UPDATED: Download 3 images
     img_ext = get_safe_image_reader(img_exterior_url)
+    img_lobby = get_safe_image_reader(img_lobby_url)
     img_room = get_safe_image_reader(img_room_url)
     
     for i, conf in enumerate(conf_numbers_list):
-        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_room, conf, i+1, len(conf_numbers_list))
+        # UPDATED: Pass 3 images
+        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_lobby, img_room, conf, i+1, len(conf_numbers_list))
         c.showPage()
     c.save(); buffer.seek(0); return buffer
 
@@ -446,13 +445,16 @@ if st.button("✨ Generate Voucher", type="primary"):
             status.write(f"Fetching info for {hotel_name}...")
             info = fetch_hotel_details(hotel_name, city, room_type)
             status.write("Finding images...")
-            img_ext = fetch_image_url(f"{hotel_name} {city} hotel exterior")
-            img_room = fetch_image_url(f"{hotel_name} {city} {room_type} interior")
+            # UPDATED: Fetch 3 images (Exterior, Lobby, Room)
+            img_ext_url = fetch_image_url(f"{hotel_name} {city} hotel exterior")
+            img_lobby_url = fetch_image_url(f"{hotel_name} {city} hotel lobby")
+            img_room_url = fetch_image_url(f"{hotel_name} {city} {room_type} interior")
             
             data = {"hotel_name": hotel_name, "guest_name": guest_name, "checkin": checkin, "checkout": checkout, 
                     "room_type": room_type, "adults": adults, "meal_plan": meal_plan, 
                     "policy_text": policy_text, "room_size": room_size}
-            pdf = generate_multipage_pdf(data, info, img_ext, img_room, conf_numbers)
+            # UPDATED: Pass 3 image URLs
+            pdf = generate_multipage_pdf(data, info, img_ext_url, img_lobby_url, img_room_url, conf_numbers)
             
             status.update(label="Done!", state="complete")
             st.download_button("⬇️ Download PDF", pdf, f"Voucher_{guest_name.replace(' ','_')}.pdf", "application/pdf")
