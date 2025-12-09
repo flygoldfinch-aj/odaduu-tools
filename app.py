@@ -248,12 +248,15 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     w_tnc, h_tnc = t_tnc.wrapOn(c, width, height)
     t_tnc.drawOn(c, left, y - h_tnc)
 
-    # --- NEW: AUTHENTICATION SEAL ---
+    # --- SEAL: AUTHENTIC STAMP ---
     try:
-        # Draw seal in bottom right corner
-        c.drawImage("seal.png", width - 130, 50, width=100, height=100, mask='auto', preserveAspectRatio=True)
+        c.saveState()
+        # Set transparency for the seal so text shows through
+        c.setFillAlpha(0.8) 
+        # Position: Bottom Right, slightly above footer
+        c.drawImage("seal.png", width - 130, 60, width=90, height=90, mask='auto', preserveAspectRatio=True)
+        c.restoreState()
     except:
-        # Fails silently if seal.png is not found, so app doesn't crash
         pass
 
     # Footer
