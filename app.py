@@ -13,6 +13,7 @@ from reportlab.lib.utils import ImageReader
 import pypdf
 import textwrap
 from math import sin, cos, radians
+import re # Added for date cleaning
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -71,7 +72,21 @@ def reset_booking_state():
         st.session_state.search_input = ""
     st.session_state.search_query = ""
 
-# --- 3. AI FUNCTIONS ---
+# --- 3. HELPER FUNCTIONS ---
+
+def parse_smart_date(date_str):
+    """Cleans and parses dates like '28 Sept 2025'."""
+    if not date_str: return None
+    try:
+        # Fix "Sept" to "Sep"
+        clean_str = date_str.replace("Sept", "Sep").strip()
+        return datetime.strptime(clean_str, "%d %b %Y").date()
+    except:
+        # Try YYYY-MM-DD
+        try: return datetime.strptime(date_str, "%Y-%m-%d").date()
+        except: return None
+
+# --- 4. AI FUNCTIONS ---
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -101,23 +116,24 @@ def extract_pdf_data(pdf_file):
         prompt = f"""
         Extract booking details from this text.
         
-        CRITICAL 1: Look for "Room 1", "Room 2".
-        CRITICAL 2: Read Cancellation Policy. Extract exact text found.
-        CRITICAL 3: Extract exact room type.
+        CRITICAL 1: Dates. Look for "Check-in" and "Check-out". Format as "DD Mon YYYY" (e.g. 28 Sept 2025).
+        CRITICAL 2: Cancellation. If free cancellation exists, EXTRACT THE DEADLINE DATE.
+        CRITICAL 3: Rooms. Look for "Room 1", "Room 2".
         
         Text Snippet: {text[:25000]}
         
         Return JSON:
         {{
             "hotel_name": "Name", "city": "City", 
-            "checkin_date": "YYYY-MM-DD", "checkout_date": "YYYY-MM-DD", 
+            "checkin_date": "YYYY-MM-DD or DD Mon YYYY", 
+            "checkout_date": "YYYY-MM-DD or DD Mon YYYY", 
             "meal_plan": "Plan", 
-            "is_refundable": true, 
-            "cancellation_text": "Exact text found in PDF",
+            "is_refundable": true/false, 
+            "cancel_deadline_date": "YYYY-MM-DD or DD Mon YYYY (Only if refundable)",
             "room_size": "Size string",
             "rooms": [
-                {{"guest_name": "Guest Room 1", "confirmation_no": "Conf Room 1", "room_type": "Exact Type 1", "adults": 2}},
-                {{"guest_name": "Guest Room 2", "confirmation_no": "Conf Room 2", "room_type": "Exact Type 2", "adults": 2}}
+                {{"guest_name": "Guest 1", "confirmation_no": "Conf 1", "room_type": "Type 1", "adults": 2}},
+                {{"guest_name": "Guest 2", "confirmation_no": "Conf 2", "room_type": "Type 2", "adults": 2}}
             ]
         }}
         """
@@ -149,7 +165,7 @@ def get_img_reader(url):
         if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
     except: return None
 
-# --- 4. PDF DRAWING ---
+# --- 5. PDF DRAWING ---
 
 def draw_vector_seal(c, x, y, size):
     c.saveState()
@@ -243,25 +259,14 @@ def generate_pdf(data, info, imgs, rooms_list):
 
         # Policies
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y-=15
-        pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability. Request upon arrival."], ["Required:", "Passport & Credit Card/Cash Deposit."]]
+        pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability."], ["Required:", "Passport & Credit Card."]]
         t = Table(pt, colWidths=[130, 380])
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),Color(0.05, 0.15, 0.35)), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
         # T&C
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
-        tnc = [
-            "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
-            f"2. Identification: The lead guest, {room['guest']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
-            "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
-            "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
-            f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
-            "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
-            "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
-            "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
-            "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
-            "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
-        ]
+        tnc = ["1. Voucher Validity: Valid for dates/services specified. Present at front desk.", f"2. Identification: Lead guest ({room['guest']}) must present Passport.", "3. No-Show: Full fee applies.", "4. Incidentals: Settled directly at hotel.", "5. Occupancy: Changes may incur charges.", "6. Hotel Rights: Refusal for inappropriate conduct.", "7. Liability: Use safety box for valuables.", "8. Non-Transferable: Cannot be resold.", "9. City Tax: Paid directly at hotel.", "10. Bed Type: Subject to availability."]
         styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
         t_data = [[Paragraph(x, styleN)] for x in tnc]
         t2 = Table(t_data, colWidths=[510])
@@ -278,7 +283,7 @@ def generate_pdf(data, info, imgs, rooms_list):
     
     c.save(); buffer.seek(0); return buffer
 
-# --- 5. UI LOGIC ---
+# --- 6. UI LOGIC ---
 
 st.title("🏯 Odaduu Voucher Generator")
 
@@ -289,15 +294,15 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
         if st.session_state.last_uploaded_file != up_file.name:
             with st.spinner("Processing New File..."):
                 reset_booking_state()
-                
                 data = extract_pdf_data(up_file)
                 if data:
                     st.session_state.hotel_name = data.get('hotel_name', '')
                     st.session_state.city = data.get('city', '')
                     
-                    try: st.session_state.checkin = datetime.strptime(data.get('checkin_date'), "%Y-%m-%d").date()
+                    # DATE CLEANING LOGIC
+                    try: st.session_state.checkin = parse_smart_date(data.get('checkin_date'))
                     except: pass
-                    try: st.session_state.checkout = datetime.strptime(data.get('checkout_date'), "%Y-%m-%d").date()
+                    try: st.session_state.checkout = parse_smart_date(data.get('checkout_date'))
                     except: pass
                     
                     st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
@@ -316,17 +321,20 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         if st.session_state.room_type and st.session_state.room_type not in st.session_state.room_options:
                             st.session_state.room_options.insert(0, st.session_state.room_type)
                     
-                    # FIX: STRICT NON-REFUNDABLE LOGIC
-                    extracted_text = data.get('cancellation_text', '')
+                    # POLICY LOGIC: Calculate days if deadline provided
+                    deadline_str = data.get('cancel_deadline_date', '')
                     is_ref = data.get('is_refundable', False)
                     
-                    # If text contains "non-refundable", force flag to False
-                    if extracted_text and "non-refundable" in extracted_text.lower():
-                        is_ref = False
-                    
-                    if is_ref:
+                    if is_ref and deadline_str:
                         st.session_state.policy_type = 'Refundable'
-                        st.session_state.policy_text_manual = extracted_text
+                        st.session_state.policy_text_manual = '' # Use calculator
+                        try:
+                            d_date = parse_smart_date(deadline_str)
+                            if d_date:
+                                # Logic: Checkin (28) - Deadline (27) = 1 day
+                                delta = (st.session_state.checkin - d_date).days
+                                st.session_state.cancel_days = max(0, delta)
+                        except: pass
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
                         st.session_state.policy_text_manual = 'Non-Refundable & Non-Amendable'
@@ -376,6 +384,7 @@ with c1:
     ptype = st.radio("Type", ["Non-Refundable", "Refundable"], horizontal=True, key="policy_type")
 
 with c2:
+    # SAFE DATE LOGIC
     curr_in = st.session_state.checkin
     min_out = curr_in + timedelta(days=1)
     if st.session_state.checkout <= curr_in: st.session_state.checkout = min_out
@@ -406,10 +415,10 @@ with c2:
     
     policy_txt = "Non-Refundable & Non-Amendable"
     if ptype == "Refundable":
-        manual_txt = st.text_input("Policy Description", value=st.session_state.policy_text_manual, key="policy_text_manual")
+        manual_txt = st.text_input("Policy Description (Optional)", value=st.session_state.policy_text_manual, key="policy_text_manual")
         if manual_txt: policy_txt = manual_txt
         else:
-            d = st.number_input("Free Cancel Days", 1, value=3)
+            d = st.number_input("Free Cancel Days Before Check-in", 0, value=st.session_state.cancel_days, key="cancel_days")
             policy_txt = f"Free Cancellation until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
             st.info(f"Auto-generated: {policy_txt}")
 
