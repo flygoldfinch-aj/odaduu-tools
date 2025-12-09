@@ -13,7 +13,7 @@ from reportlab.lib.utils import ImageReader
 import pypdf
 import textwrap
 from math import sin, cos, radians
-import re # Added for advanced text cleaning
+import re
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -40,7 +40,8 @@ def init_state():
         'room_size': '',
         'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
         'policy_text_manual': '',
-        'search_query': ''
+        'search_query': '',
+        'audit_log': '' # NEW: Stores the AI's verification message
     }
     
     for i in range(10):
@@ -63,6 +64,7 @@ def reset_booking_state():
     st.session_state.room_options = []
     st.session_state.policy_text_manual = ''
     st.session_state.suggestions = []
+    st.session_state.audit_log = ''
     
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
@@ -75,27 +77,13 @@ def reset_booking_state():
 # --- 3. HELPER FUNCTIONS ---
 
 def parse_smart_date(date_str):
-    """Robust date parser handling 'Sept', 'Sep', etc."""
     if not date_str: return None
-    
-    # 1. Clean the string
     clean_str = date_str.strip()
-    # Replace "Sept" with "Sep" (Common PDF error)
     clean_str = re.sub(r'\bSept\b', 'Sep', clean_str, flags=re.IGNORECASE)
-    
-    # 2. Try formats
-    formats = [
-        "%d %b %Y",     # 28 Sep 2025
-        "%Y-%m-%d",     # 2025-09-28
-        "%d %B %Y",     # 28 September 2025
-        "%b %d, %Y"     # Sep 28, 2025
-    ]
-    
+    formats = ["%d %b %Y", "%Y-%m-%d", "%d %B %Y", "%b %d, %Y"]
     for fmt in formats:
-        try:
-            return datetime.strptime(clean_str, fmt).date()
-        except ValueError:
-            continue
+        try: return datetime.strptime(clean_str, fmt).date()
+        except ValueError: continue
     return None
 
 # --- 4. AI FUNCTIONS ---
@@ -125,27 +113,29 @@ def extract_pdf_data(pdf_file):
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
         model = genai.GenerativeModel('gemini-2.0-flash')
+        # UPDATED: "Auditor" Style Prompt
         prompt = f"""
-        Extract booking details.
+        Act as a Data Auditor. Extract and VERIFY booking details.
         
-        CRITICAL 1: Dates. Look for "Check-in" and "Check-out". 
-        CRITICAL 2: Cancellation. If free cancellation exists, FIND THE DEADLINE DATE (e.g., "before 27 Sept 2025").
-        CRITICAL 3: Rooms. Look for "Room 1", "Room 2".
+        STEP 1: Find "Room 1", "Room 2" to detect multiple rooms.
+        STEP 2: Check dates. Convert non-standard formats (e.g. "Sept") to YYYY-MM-DD.
+        STEP 3: Check Cancellation Policy. If it says "non-refundable", set is_refundable=false.
         
         Text Snippet: {text[:25000]}
         
         Return JSON:
         {{
             "hotel_name": "Name", "city": "City", 
-            "checkin_date": "DD Mon YYYY", 
-            "checkout_date": "DD Mon YYYY", 
+            "checkin_date": "YYYY-MM-DD", "checkout_date": "YYYY-MM-DD", 
             "meal_plan": "Plan", 
             "is_refundable": true, 
-            "cancel_deadline_date": "DD Mon YYYY (Extraction of the date ONLY, leave null if non-refundable)",
+            "cancel_deadline_date": "YYYY-MM-DD (or null)",
+            "cancellation_text": "Exact policy text found",
             "room_size": "Size string",
+            "audit_note": "Short summary of what you verified (e.g. 'Found 2 rooms, Corrected date format, Verified Refundable policy')",
             "rooms": [
-                {{"guest_name": "Guest 1", "confirmation_no": "Conf 1", "room_type": "Type 1", "adults": 2}},
-                {{"guest_name": "Guest 2", "confirmation_no": "Conf 2", "room_type": "Type 2", "adults": 2}}
+                {{"guest_name": "Guest 1", "confirmation_no": "Conf 1", "room_type": "Exact Type 1", "adults": 2}},
+                {{"guest_name": "Guest 2", "confirmation_no": "Conf 2", "room_type": "Exact Type 2", "adults": 2}}
             ]
         }}
         """
@@ -208,7 +198,7 @@ def generate_pdf(data, info, imgs, rooms_list):
     i_ext = get_img_reader(imgs[0]); i_lobby = get_img_reader(imgs[1]); i_room = get_img_reader(imgs[2])
 
     for i, room in enumerate(rooms_list):
-        # Header / Watermark
+        # Header
         try: c.saveState(); c.setFillAlpha(0.04); c.drawImage("logo.png", w/2-200, h/2-75, 400, 150, mask='auto', preserveAspectRatio=True); c.restoreState()
         except: pass
         try: c.drawImage("logo.png", w/2-80, h-60, 160, 55, mask='auto', preserveAspectRatio=True)
@@ -229,10 +219,10 @@ def generate_pdf(data, info, imgs, rooms_list):
                 c.drawString(left+120, y, str(val)); y-=12
             y-=5
 
-        # Guest Info
+        # Guest
         draw_sect("Guest Information", [("Guest Name:", room['guest'], True), ("Confirmation No.:", room['conf'], True), ("Booking Date:", datetime.now().strftime("%d %b %Y"), False)])
 
-        # Hotel Info
+        # Hotel
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Hotel Details"); y-=5; c.line(left, y, w-40, y); y-=12
         c.setFillColor(Color(0.1, 0.1, 0.1)); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Hotel:")
         c.setFillColor(Color(0.2, 0.2, 0.2)); c.setFont("Helvetica-Bold", 10); c.drawString(left+120, y, data['hotel']); y-=12
@@ -248,7 +238,7 @@ def generate_pdf(data, info, imgs, rooms_list):
             c.setFillColor(Color(0.2, 0.2, 0.2)); c.setFont("Helvetica", 10); c.drawString(left+120, y, v); y-=12
         y-=5
 
-        # Room Info
+        # Room
         r_items = [("Room Type:", data['room_type'], False), ("No. of Pax:", f"{data['adults']} Adults", False), ("Meal Plan:", data['meal'], False)]
         if data['room_size']: r_items.append(("Room Size:", data['room_size'], False))
         r_items.append(("Cancellation:", data['policy'], "Refundable" in data['policy']))
@@ -311,10 +301,12 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     st.session_state.hotel_name = data.get('hotel_name', '')
                     st.session_state.city = data.get('city', '')
                     
-                    # DATE PARSING FIX (Handle 'Sept')
+                    # Store Audit Log
+                    st.session_state.audit_log = data.get('audit_note', 'Extraction Complete.')
+                    
+                    # Date Logic
                     d_in = parse_smart_date(data.get('checkin_date'))
                     d_out = parse_smart_date(data.get('checkout_date'))
-                    
                     if d_in: st.session_state.checkin = d_in
                     if d_out: st.session_state.checkout = d_out
                     
@@ -334,19 +326,22 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         if st.session_state.room_type and st.session_state.room_type not in st.session_state.room_options:
                             st.session_state.room_options.insert(0, st.session_state.room_type)
                     
-                    # CANCELLATION LOGIC FIX
+                    # Cancellation
                     is_ref = data.get('is_refundable', False)
                     dead_date_str = data.get('cancel_deadline_date')
-                    
+                    policy_text_raw = data.get('cancellation_text', '')
+
+                    if policy_text_raw and "non-refundable" in policy_text_raw.lower():
+                        is_ref = False
+
                     if is_ref and dead_date_str:
-                        dead_date = parse_smart_date(dead_date_str)
-                        if dead_date:
-                            st.session_state.policy_type = 'Refundable'
-                            st.session_state.policy_text_manual = '' # Empty text to force calculator
-                            
-                            # Calculate days: Checkin - Deadline
+                        st.session_state.policy_type = 'Refundable'
+                        st.session_state.policy_text_manual = ''
+                        try:
+                            dead_date = parse_smart_date(dead_date_str)
                             delta = (st.session_state.checkin - dead_date).days
                             st.session_state.cancel_days = max(1, delta)
+                        except: pass
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
                         st.session_state.policy_text_manual = 'Non-Refundable & Non-Amendable'
@@ -354,6 +349,10 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     st.session_state.last_uploaded_file = up_file.name
                     st.success("New Booking Loaded!")
                     st.rerun()
+
+# SHOW AUDIT LOG IF EXISTS
+if st.session_state.audit_log:
+    st.info(f"🤖 **AI Audit:** {st.session_state.audit_log}")
 
 # === MANUAL SEARCH ===
 st.markdown("### 🏨 Hotel Details")
@@ -396,7 +395,6 @@ with c1:
     ptype = st.radio("Type", ["Non-Refundable", "Refundable"], horizontal=True, key="policy_type")
 
 with c2:
-    # SAFE DATE LOGIC
     curr_in = st.session_state.checkin
     min_out = curr_in + timedelta(days=1)
     if st.session_state.checkout <= curr_in: st.session_state.checkout = min_out
@@ -407,9 +405,7 @@ with c2:
     opts = st.session_state.room_options.copy()
     current = st.session_state.room_type
     
-    if current and current not in opts: 
-        opts.insert(0, current)
-        
+    if current and current not in opts: opts.insert(0, current)
     opts.append("Manual...")
     
     def on_room_change():
