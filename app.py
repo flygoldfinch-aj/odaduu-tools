@@ -27,7 +27,6 @@ except Exception:
 # --- 2. AI FUNCTIONS (Extraction & Search) ---
 
 def extract_details_from_pdf(pdf_file):
-    """Reads a PDF and uses Gemini to extract structured booking data."""
     try:
         pdf_reader = pypdf.PdfReader(pdf_file)
         text = ""
@@ -64,7 +63,6 @@ def extract_details_from_pdf(pdf_file):
         return None
 
 def fetch_hotel_details(hotel_name, city, room_type):
-    """Uses Gemini to find address, phone, policies, and ROOM SIZE."""
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
     I need details for the hotel: "{hotel_name}" in "{city}" and specifically the room type: "{room_type}".
@@ -112,7 +110,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     right_margin = width - 40
     center_x = width / 2
     
-    # Watermark
+    # --- Watermark ---
     try:
         c.saveState()
         c.setFillAlpha(0.08)
@@ -121,45 +119,55 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         c.restoreState()
     except: pass
 
-    # Header
+    # --- Header Logo (Centered and larger) ---
     try:
-        c.drawImage("logo.png", center_x - 70, height - 70, width=140, height=50, mask='auto', preserveAspectRatio=True)
+        logo_w = 180
+        logo_h = 60
+        # Draw logo slightly higher
+        c.drawImage("logo.png", center_x - (logo_w/2), height - 80, width=logo_w, height=logo_h, mask='auto', preserveAspectRatio=True)
     except:
         c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(center_x, height - 60, "ODADUU TRAVEL DMC")
 
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 16)
     title_text = "HOTEL CONFIRMATION VOUCHER"
     if total_rooms > 1: title_text += f" (Room {room_index} of {total_rooms})"
-    c.drawCentredString(center_x, height - 100, title_text)
+    c.drawCentredString(center_x, height - 110, title_text)
 
+    # Helper for drawing rows
     def draw_row(y_pos, label, value, bold_value=False):
         c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y_pos, label)
         c.setFillColor(text_color); c.setFont("Helvetica-Bold" if bold_value else "Helvetica", 10)
         c.drawString(left_margin + 120, y_pos, str(value))
-        return y_pos - 16
+        return y_pos - 15  # Tightened spacing from 16 to 15
 
-    current_y = height - 140
+    current_y = height - 150
 
-    # Guest Info
+    # --- Guest Info ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Guest Information")
-    current_y -= 8; c.setStrokeColor(lightgrey); c.line(left_margin, current_y, right_margin, current_y); current_y -= 20
+    current_y -= 8; c.setStrokeColor(lightgrey); c.line(left_margin, current_y, right_margin, current_y); current_y -= 18
 
     current_y = draw_row(current_y, "Guest Name:", data['guest_name'], bold_value=True)
     current_y = draw_row(current_y, "Confirmation No.:", current_conf_no, bold_value=True)
     current_y = draw_row(current_y, "Booking Date:", datetime.now().strftime("%d %b %Y"))
-    current_y -= 15
+    current_y -= 12 # Gap between sections
 
-    # Hotel Details
+    # --- Hotel Details ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Hotel Details")
-    current_y -= 8; c.line(left_margin, current_y, right_margin, current_y); current_y -= 20
+    current_y -= 8; c.line(left_margin, current_y, right_margin, current_y); current_y -= 18
 
     c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "Hotel:")
-    c.setFillColor(text_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin + 120, current_y, data['hotel_name']); current_y -= 16
+    c.setFillColor(text_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin + 120, current_y, data['hotel_name']); current_y -= 15
     
+    # Address handling
     c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "Address:")
     c.setFillColor(text_color); c.setFont("Helvetica", 10)
-    c.drawString(left_margin + 120, current_y, hotel_info.get("address_line_1", "")); current_y -= 12
-    c.drawString(left_margin + 120, current_y, hotel_info.get("address_line_2", "")); current_y -= 16
+    addr1 = hotel_info.get("address_line_1", "")
+    addr2 = hotel_info.get("address_line_2", "")
+    c.drawString(left_margin + 120, current_y, addr1); current_y -= 12
+    if addr2:
+        c.drawString(left_margin + 120, current_y, addr2); current_y -= 15
+    else:
+        current_y -= 3
     
     current_y = draw_row(current_y, "Phone:", hotel_info.get("phone", ""))
     
@@ -169,11 +177,11 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     current_y = draw_row(current_y, "Check-In:", c_in)
     current_y = draw_row(current_y, "Check-Out:", c_out)
     current_y = draw_row(current_y, "Nights:", str(nights))
-    current_y -= 15
+    current_y -= 12
 
-    # Room Info
+    # --- Room Info ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Room Information")
-    current_y -= 8; c.line(left_margin, current_y, right_margin, current_y); current_y -= 20
+    current_y -= 8; c.line(left_margin, current_y, right_margin, current_y); current_y -= 18
 
     current_y = draw_row(current_y, "Room Type:", data['room_type'])
     current_y = draw_row(current_y, "No. of Pax:", f"{data['adults']} Adults")
@@ -182,19 +190,28 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     
     is_refundable = "Refundable" in data['policy_text']
     current_y = draw_row(current_y, "Cancellation:", data['policy_text'], bold_value=is_refundable)
-    current_y -= 10
-
-    # Images
-    img_y_pos = current_y - 110
+    
+    # --- Images (FIXED POSITIONING) ---
+    # We explicitly move the cursor down to ensure gap
+    current_y -= 10 
+    
+    img_height = 120
+    img_width = 213 # Maintain ratio approx 16:9
+    
+    # Ensure we don't draw over text. Top of image is at current_y - 10
+    img_y_bottom = current_y - img_height - 10 
+    
     if img_exterior:
-        try: c.drawImage(img_exterior, left_margin, img_y_pos, width=240, height=135)
+        try: c.drawImage(img_exterior, left_margin, img_y_bottom, width=img_width, height=img_height)
         except: pass
     if img_room:
-        try: c.drawImage(img_room, left_margin + 240 + 15, img_y_pos, width=240, height=135)
+        try: c.drawImage(img_room, left_margin + img_width + 15, img_y_bottom, width=img_width, height=img_height)
         except: pass
-    current_y = img_y_pos - 30
+    
+    # Reset cursor below images
+    current_y = img_y_bottom - 25
 
-    # Policies
+    # --- Policies ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, current_y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); current_y -= 15
     
     table_data = [
@@ -214,10 +231,10 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     ]))
     w, h = table.wrapOn(c, width, height)
     table.drawOn(c, left_margin, current_y - h)
-    current_y -= (h + 20)
+    current_y -= (h + 15)
 
-    # T&C
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, current_y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); current_y -= 12
+    # --- T&C (Small Text) ---
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); current_y -= 10
     tnc_lines = [
         "1. Voucher Validity: Valid only for dates/services specified.",
         f"2. Identification: Lead guest ({data['guest_name']}) must be present with valid Passport.",
@@ -230,12 +247,12 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         "9. City Tax: City tax (if any) has to be paid and settled directly at the hotel."
     ]
     c.setFillColor(text_color); c.setFont("Helvetica", 7)
-    for line in tnc_lines: c.drawString(left_margin, current_y, line); current_y -= 10
+    for line in tnc_lines: c.drawString(left_margin, current_y, line); current_y -= 9
 
-    # Footer
-    c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 40, width, 40)
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left_margin, 55, "Issued by: Odaduu Travel DMC")
-    c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left_margin, 43, "Email: aashwin@odaduu.jp")
+    # --- Footer (Fixed) ---
+    c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 50, width, 50)
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left_margin, 35, "Issued by: Odaduu Travel DMC")
+    c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left_margin, 25, "Email: aashwin@odaduu.jp")
 
 def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_room_url, conf_numbers_list):
     buffer = io.BytesIO()
@@ -288,7 +305,6 @@ with col1:
     st.subheader("Room Details")
     num_rooms = st.number_input("Number of Rooms", min_value=1, value=1)
     
-    # Confirmation Logic
     conf_numbers = []
     default_conf = get_val("confirmation_no", "")
     
