@@ -1,24 +1,3 @@
-Yes, that is a great addition to speed things up.
-
-We can use Gemini to fetch the **standard room inventory** for the selected hotel (e.g., "Superior", "Deluxe", "Club Mirage", "Corner Suite") and populate a dropdown.
-
-**⚠️ Important Note:** The AI knows the *marketing names* of the rooms (e.g., "Deluxe King"), but it cannot see "Live Inventory" (it doesn't know if the room is sold out today).
-
-Here is the updated **`app.py`**.
-
-### **What is New?**
-
-1.  **Room Type Dropdown:** As soon as you select a hotel, the AI fetches the room list.
-2.  **"Other" Option:** If the specific B2B room name isn't listed (e.g., "Promo Rate Deluxe"), you can select "Type Manually..." to write it yourself.
-3.  **PDF Auto-Match:** If you upload a PDF, the tool attempts to match the PDF's room text to the dropdown automatically.
-
------
-
-### **The Final Code**
-
-Copy and replace your entire `app.py` with this.
-
-````python
 import streamlit as st
 import google.generativeai as genai
 import requests
@@ -253,7 +232,6 @@ if search_q:
             if suggestions:
                 selected_hotel = st.radio("Select Correct Hotel:", suggestions)
                 if selected_hotel:
-                    # Only fetch rooms if hotel changed
                     if st.session_state.form_data.get('hotel_name') != selected_hotel:
                         st.session_state.form_data['hotel_name'] = selected_hotel
                         with st.spinner(f"Fetching room types for {selected_hotel}..."):
@@ -269,7 +247,6 @@ with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
             if extracted:
                 st.session_state.form_data.update(extracted)
                 st.session_state.last_uploaded = uploaded_file.name
-                # Trigger room fetch for uploaded hotel too
                 if extracted.get('hotel_name'):
                     st.session_state.room_options = get_room_types_for_hotel(extracted['hotel_name'])
                 st.success("Data Extracted!")
@@ -307,23 +284,13 @@ with col2:
     checkin = st.date_input("Check-In", value=d_in)
     checkout = st.date_input("Check-Out", value=d_out)
     
-    # --- ROOM TYPE DROPDOWN LOGIC ---
     current_room_val = get_val("room_type", "")
-    
-    # Prepare options: Fetched list + "Type Manually..." + Current Value (if from PDF)
     options = st.session_state.room_options.copy()
-    if current_room_val and current_room_val not in options:
-        options.insert(0, current_room_val) # Put PDF value at top
+    if current_room_val and current_room_val not in options: options.insert(0, current_room_val)
     options.append("Type Manually...")
     
-    selected_room_option = st.selectbox("Room Type Selection", options)
-    
-    if selected_room_option == "Type Manually...":
-        room_type = st.text_input("Enter Room Type Manually", value="")
-    else:
-        room_type = selected_room_option
-        # Hidden input to keep state consistent if they switch back
-        # st.session_state.form_data['room_type'] = room_type 
+    sel_room = st.selectbox("Room Type", options)
+    room_type = st.text_input("Enter Room Name", "") if sel_room == "Type Manually..." else sel_room
 
     adults = st.number_input("Adults", 1, value=get_val("adults", 2))
     room_size = st.text_input("Room Size (Optional - e.g. 35 sqm)", value=get_val("room_size", ""), help="Leave blank to hide in PDF")
@@ -355,4 +322,3 @@ if st.button("✨ Generate Voucher", type="primary"):
             
             status.update(label="Done!", state="complete")
             st.download_button("⬇️ Download PDF", pdf, f"Voucher_{guest_name.replace(' ','_')}.pdf", "application/pdf")
-````
