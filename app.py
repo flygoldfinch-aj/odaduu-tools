@@ -41,7 +41,6 @@ def get_hotel_suggestions(query):
     except: return []
 
 def detect_city_from_hotel(hotel_name):
-    """Simple AI call to extract just the city name from a hotel name."""
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
     What city is the hotel "{hotel_name}" located in?
@@ -112,10 +111,12 @@ def fetch_image_url(query):
     except: pass
     return None
 
-def download_image(url):
+def get_safe_image_reader(url):
+    if not url: return None
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200: return io.BytesIO(response.content)
+        response = requests.get(url, timeout=4)
+        if response.status_code == 200:
+            return ImageReader(io.BytesIO(response.content))
     except: return None
 
 # --- 3. PDF GENERATION ---
@@ -180,17 +181,22 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     y = row(y, "Cancellation:", data['policy_text'], "Refundable" in data['policy_text'])
     y -= 5
 
-    # Images
-    img_h = 95; img_w = 180; img_y = y - img_h
-    if img_exterior:
-        try: c.drawImage(img_exterior, left, img_y, width=img_w, height=img_h)
-        except: pass
-    if img_room:
-        try: c.drawImage(img_room, left + img_w + 10, img_y, width=img_w, height=img_h)
-        except: pass
-    
-    # 1. Spacing maintained
-    y = img_y - 30 
+    # Images - SMART LAYOUT LOGIC
+    # Only calculate image space if images actually exist
+    if img_exterior or img_room:
+        img_h = 95; img_w = 180; img_y = y - img_h
+        if img_exterior:
+            try: c.drawImage(img_exterior, left, img_y, width=img_w, height=img_h)
+            except: pass
+        if img_room:
+            try: c.drawImage(img_room, left + img_w + 10, img_y, width=img_w, height=img_h)
+            except: pass
+        
+        # Apply spacing only if images were shown
+        y = img_y - 35 
+    else:
+        # No images? Just add a tiny gap before the next section
+        y -= 15
 
     # Policy Table
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y -= 15
@@ -210,7 +216,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     ]))
     t.wrapOn(c, width, height); t.drawOn(c, left, y - 60); y -= (60 + 15)
 
-    # T&C - 2. Numbers + New Point #10
+    # T&C
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
     
     tnc_raw = [
@@ -245,8 +251,10 @@ def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_room_url, con
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    img_ext = ImageReader(download_image(img_exterior_url)) if img_exterior_url and download_image(img_exterior_url) else None
-    img_room = ImageReader(download_image(img_room_url)) if img_room_url and download_image(img_room_url) else None
+    
+    img_ext = get_safe_image_reader(img_exterior_url)
+    img_room = get_safe_image_reader(img_room_url)
+    
     for i, conf in enumerate(conf_numbers_list):
         draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_room, conf, i+1, len(conf_numbers_list))
         c.showPage()
@@ -275,7 +283,7 @@ if search_q:
                     if st.session_state.form_data.get('hotel_name') != selected_hotel:
                         st.session_state.form_data['hotel_name'] = selected_hotel
                         
-                        # 4. AUTO DETECT CITY
+                        # AUTO DETECT CITY
                         with st.spinner("Detecting details..."):
                             st.session_state.room_options = get_room_types_for_hotel(selected_hotel)
                             detected_city = detect_city_from_hotel(selected_hotel)
@@ -346,7 +354,6 @@ with col2:
     meal_plan = st.selectbox("Meal Plan", opts, index=opts.index(def_meal) if def_meal in opts else 0)
     
     if policy_type == "Refundable":
-        # 3. REMOVED THE LIMIT (min_value=1, no max_value)
         days = st.number_input("Free cancel days before?", min_value=1, value=3)
         policy_text = f"Free Cancellation until {(checkin - timedelta(days=days)).strftime('%d %b %Y')}"
         st.info(f"Voucher says: {policy_text}")
