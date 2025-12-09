@@ -4,13 +4,13 @@ import requests
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import Color, lightgrey
-from reportlab.platypus import Table, TableStyle
+from reportlab.platypus import Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime, timedelta
 import io
 import json
 from reportlab.lib.utils import ImageReader
 import pypdf
-import textwrap
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -181,8 +181,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     y = row(y, "Cancellation:", data['policy_text'], "Refundable" in data['policy_text'])
     y -= 5
 
-    # Images - SMART LAYOUT LOGIC
-    # Only calculate image space if images actually exist
+    # Images
     if img_exterior or img_room:
         img_h = 95; img_w = 180; img_y = y - img_h
         if img_exterior:
@@ -191,11 +190,8 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         if img_room:
             try: c.drawImage(img_room, left + img_w + 10, img_y, width=img_w, height=img_h)
             except: pass
-        
-        # Apply spacing only if images were shown
-        y = img_y - 35 
+        y = img_y - 35
     else:
-        # No images? Just add a tiny gap before the next section
         y -= 15
 
     # Policy Table
@@ -214,9 +210,12 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         ('PADDING',(0,0),(-1,-1),3),
         ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))
     ]))
-    t.wrapOn(c, width, height); t.drawOn(c, left, y - 60); y -= (60 + 15)
+    t.wrapOn(c, width, height); t.drawOn(c, left, y - 60); 
+    
+    # INCREASED SPACING AFTER TABLE
+    y -= (60 + 30) # Changed from 15 to 30
 
-    # T&C
+    # T&C - GRID TABLE VERSION
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
     
     tnc_raw = [
@@ -232,15 +231,28 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
     ]
     
-    c.setFillColor(text_color); c.setFont("Helvetica", 6.5)
+    # Create Paragraph styles for T&C cells
+    styles = getSampleStyleSheet()
+    styleTNC = styles["Normal"]
+    styleTNC.fontSize = 7
+    styleTNC.leading = 8 # Line spacing inside the cell
     
-    for item in tnc_raw:
-        wrapped_lines = textwrap.wrap(item, width=130)
-        for line in wrapped_lines:
-            if y > 50:
-                c.drawString(left, y, line)
-                y -= 8
-        y -= 2
+    # Convert text to Paragraph objects (this handles wrapping inside the grid)
+    tnc_data = [[Paragraph(item, styleTNC)] for item in tnc_raw]
+    
+    # T&C Table
+    t_tnc = Table(tnc_data, colWidths=[510])
+    t_tnc.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2)), # The Box/Grid
+        ('PADDING', (0,0), (-1,-1), 2),
+        ('VALIGN', (0,0), (-1,-1), 'TOP')
+    ]))
+    
+    # Draw T&C Table
+    w_tnc, h_tnc = t_tnc.wrapOn(c, width, height)
+    # Ensure we don't overwrite footer. If T&C is too long, we might need logic, 
+    # but for now we draw it.
+    t_tnc.drawOn(c, left, y - h_tnc)
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
