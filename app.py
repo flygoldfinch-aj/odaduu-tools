@@ -11,6 +11,7 @@ import io
 import json
 from reportlab.lib.utils import ImageReader
 import pypdf
+import textwrap
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -212,8 +213,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     ]))
     t.wrapOn(c, width, height); t.drawOn(c, left, y - 60); 
     
-    # INCREASED SPACING AFTER TABLE
-    y -= (60 + 30) # Changed from 15 to 30
+    y -= (60 + 30)
 
     # T&C - GRID TABLE VERSION
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
@@ -231,28 +231,30 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
     ]
     
-    # Create Paragraph styles for T&C cells
     styles = getSampleStyleSheet()
     styleTNC = styles["Normal"]
     styleTNC.fontSize = 7
-    styleTNC.leading = 8 # Line spacing inside the cell
+    styleTNC.leading = 8
     
-    # Convert text to Paragraph objects (this handles wrapping inside the grid)
     tnc_data = [[Paragraph(item, styleTNC)] for item in tnc_raw]
     
-    # T&C Table
     t_tnc = Table(tnc_data, colWidths=[510])
     t_tnc.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2)), # The Box/Grid
+        ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2)),
         ('PADDING', (0,0), (-1,-1), 2),
         ('VALIGN', (0,0), (-1,-1), 'TOP')
     ]))
     
-    # Draw T&C Table
     w_tnc, h_tnc = t_tnc.wrapOn(c, width, height)
-    # Ensure we don't overwrite footer. If T&C is too long, we might need logic, 
-    # but for now we draw it.
     t_tnc.drawOn(c, left, y - h_tnc)
+
+    # --- NEW: AUTHENTICATION SEAL ---
+    try:
+        # Draw seal in bottom right corner
+        c.drawImage("seal.png", width - 130, 50, width=100, height=100, mask='auto', preserveAspectRatio=True)
+    except:
+        # Fails silently if seal.png is not found, so app doesn't crash
+        pass
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
