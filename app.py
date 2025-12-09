@@ -12,6 +12,7 @@ import json
 from reportlab.lib.utils import ImageReader
 import pypdf
 import textwrap
+from math import pi
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Odaduu Voucher Generator", page_icon="🏨", layout="wide")
@@ -121,6 +122,45 @@ def get_safe_image_reader(url):
     except: return None
 
 # --- 3. PDF GENERATION ---
+
+def draw_vector_seal(c, x, y, size):
+    """Draws a vector-based authentication seal."""
+    c.saveState()
+    # Set seal color (dark blue) and transparency
+    seal_color = Color(0.1, 0.2, 0.4)
+    c.setStrokeColor(seal_color)
+    c.setFillColor(seal_color)
+    c.setFillAlpha(0.7)
+    c.setStrokeAlpha(0.7)
+    c.setLineWidth(2)
+
+    # Center point
+    cx, cy = x + size / 2, y + size / 2
+    r_outer = size / 2
+    r_inner = r_outer - 5
+
+    # Draw rings
+    c.circle(cx, cy, r_outer, stroke=1, fill=0)
+    c.setLineWidth(1)
+    c.circle(cx, cy, r_inner, stroke=1, fill=0)
+
+    # Draw center text
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(cx, cy + 5, "ODADUU")
+    c.setFont("Helvetica-Bold", 7)
+    c.drawCentredString(cx, cy - 5, "TRAVEL DMC")
+    
+    # Draw arcing text (simplified as straight text rotated)
+    c.setFont("Helvetica-Bold", 6)
+    c.saveState()
+    c.translate(cx, cy)
+    c.rotate(25) # Slight rotation for stamped look
+    c.drawCentredString(0, r_inner - 12, "CERTIFIED AUTHENTIC")
+    c.drawCentredString(0, -r_inner + 8, "OFFICIAL VOUCHER")
+    c.restoreState()
+
+    c.restoreState()
+
 def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room, current_conf_no, room_index, total_rooms):
     odaduu_blue = Color(0.05, 0.15, 0.35); odaduu_orange = Color(1, 0.4, 0)
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
@@ -248,16 +288,9 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     w_tnc, h_tnc = t_tnc.wrapOn(c, width, height)
     t_tnc.drawOn(c, left, y - h_tnc)
 
-    # --- SEAL: AUTHENTIC STAMP ---
-    try:
-        c.saveState()
-        # Set transparency for the seal so text shows through
-        c.setFillAlpha(0.8) 
-        # Position: Bottom Right, slightly above footer
-        c.drawImage("seal.png", width - 130, 60, width=90, height=90, mask='auto', preserveAspectRatio=True)
-        c.restoreState()
-    except:
-        pass
+    # --- NEW: VECTOR AUTHENTICATION SEAL ---
+    # Draws the seal directly onto the PDF, ensuring transparency and sharpness.
+    draw_vector_seal(c, width - 130, 65, 80)
 
     # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
