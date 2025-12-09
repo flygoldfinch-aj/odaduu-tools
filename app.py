@@ -92,7 +92,7 @@ def download_image(url):
         if response.status_code == 200: return io.BytesIO(response.content)
     except: return None
 
-# --- 3. PDF GENERATION (COMPACT LAYOUT) ---
+# --- 3. PDF GENERATION (Adjusted Spacing) ---
 def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room, current_conf_no, room_index, total_rooms):
     odaduu_blue = Color(0.05, 0.15, 0.35)
     odaduu_orange = Color(1, 0.4, 0)
@@ -103,7 +103,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     right_margin = width - 40
     center_x = width / 2
     
-    # 1. Watermark (Lighter: 4%)
+    # Watermark
     try:
         c.saveState()
         c.setFillAlpha(0.04)
@@ -112,7 +112,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
         c.restoreState()
     except: pass
 
-    # 2. Header
+    # Header
     try:
         logo_w = 160; logo_h = 55
         c.drawImage("logo.png", center_x - (logo_w/2), height - 75, width=logo_w, height=logo_h, mask='auto', preserveAspectRatio=True)
@@ -124,7 +124,6 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     if total_rooms > 1: title_text += f" (Room {room_index} of {total_rooms})"
     c.drawCentredString(center_x, height - 100, title_text)
 
-    # Row Helper (Tight spacing: 14pts)
     def draw_row(y_pos, label, value, bold_value=False):
         c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y_pos, label)
         c.setFillColor(text_color); c.setFont("Helvetica-Bold" if bold_value else "Helvetica", 10)
@@ -133,7 +132,7 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
 
     current_y = height - 135
 
-    # --- Guest Info ---
+    # --- Sections ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Guest Information")
     current_y -= 6; c.setStrokeColor(lightgrey); c.line(left_margin, current_y, right_margin, current_y); current_y -= 15
 
@@ -142,7 +141,6 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     current_y = draw_row(current_y, "Booking Date:", datetime.now().strftime("%d %b %Y"))
     current_y -= 8
 
-    # --- Hotel Details ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Hotel Details")
     current_y -= 6; c.line(left_margin, current_y, right_margin, current_y); current_y -= 15
 
@@ -151,7 +149,6 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     
     c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "Address:")
     c.setFillColor(text_color); c.setFont("Helvetica", 10)
-    # Handle long address
     addr1 = hotel_info.get("address_line_1", "")
     addr2 = hotel_info.get("address_line_2", "")
     c.drawString(left_margin + 120, current_y, addr1); current_y -= 12
@@ -168,7 +165,6 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     current_y = draw_row(current_y, "Nights:", str(nights))
     current_y -= 8
 
-    # --- Room Info ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Room Information")
     current_y -= 6; c.line(left_margin, current_y, right_margin, current_y); current_y -= 15
 
@@ -180,9 +176,9 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     is_refundable = "Refundable" in data['policy_text']
     current_y = draw_row(current_y, "Cancellation:", data['policy_text'], bold_value=is_refundable)
     
-    # --- Images (Slightly smaller to fit) ---
+    # --- Images ---
     current_y -= 8
-    img_height = 110 # Reduced height
+    img_height = 110 
     img_width = 200
     img_y_pos = current_y - img_height
     
@@ -215,7 +211,10 @@ def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room
     ]))
     w, h = table.wrapOn(c, width, height)
     table.drawOn(c, left_margin, current_y - h)
-    current_y -= (h + 15)
+    
+    # --- INCREASED SPACING HERE ---
+    # Changed from 15 to 30 to give more breathing room
+    current_y -= (h + 30) 
 
     # --- T&C ---
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); current_y -= 10
