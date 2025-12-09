@@ -122,15 +122,12 @@ def extract_pdf_data(pdf_file):
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
         model = genai.GenerativeModel('gemini-2.0-flash')
-        # FINAL PROMPT: Comprehensive Audit for ALL fields
         prompt = f"""
-        Act as a strict data parser and Auditor. Your job is to extract, verify, and standardize ALL booking data from the PDF text.
-
-        CRITICAL INSTRUCTIONS:
-        1. FIELD AUDIT: Verify the Hotel Name, Guest Name, Room Type, and Meal Plan found in the text.
-        2. DATES: Find Check-in/Check-out. Return DATES exactly as they appear (e.g. "28 Sept 2025"). Do NOT convert them to YYYY-MM-DD.
-        3. POLICY: Find Cancellation details. If the policy is based on a deadline, extract the raw date string.
-
+        Extract booking details.
+        
+        CRITICAL: Return DATES exactly as they appear (e.g. "28 Sept 2025"). Do NOT convert them to YYYY-MM-DD.
+        CRITICAL: Look for "Room 1", "Room 2".
+        
         Text Snippet: {text[:25000]}
         
         Return JSON:
@@ -275,9 +272,20 @@ def generate_pdf(data, info, imgs, rooms_list):
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),Color(0.05, 0.15, 0.35)), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
-        # T&C
+        # T&C (Restored Full Version)
         c.setFillColor(Color(0.05, 0.15, 0.35)); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
-        tnc = ["1. Voucher Validity: Valid for dates/services specified. Present at front desk.", f"2. Identification: Lead guest ({room['guest']}) must present Passport.", "3. No-Show Policy: Full fee applies.", "4. Incidentals: Settled directly at hotel.", "5. Occupancy: Changes may incur charges.", "6. Hotel Rights: Refusal for inappropriate conduct.", "7. Liability: Use safety box for valuables.", "8. Non-Transferable: Cannot be resold.", "9. City Tax: Paid directly at hotel.", "10. Bed Type: Subject to availability."]
+        tnc = [
+            "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
+            f"2. Identification: The lead guest, {room['guest']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
+            "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
+            "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
+            f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
+            "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
+            "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
+            "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
+            "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
+            "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
+        ]
         styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
         t_data = [[Paragraph(x, styleN)] for x in tnc]
         t2 = Table(t_data, colWidths=[510])
@@ -314,7 +322,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     d_in = parse_smart_date(data.get('checkin_raw'))
                     d_out = parse_smart_date(data.get('checkout_raw'))
                     
-                    # CRITICAL FIX: DATE SWAPPING LOGIC
+                    # CRITICAL FIX 1: DATE SWAPPING LOGIC
                     if d_in and d_out and d_in > d_out:
                         d_in, d_out = d_out, d_in
                         
@@ -345,7 +353,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         dead_date = parse_smart_date(dead_raw)
                         if dead_date:
                             st.session_state.policy_type = 'Refundable'
-                            st.session_state.policy_text_manual = '' 
+                            st.session_state.policy_text_manual = '' # Reset to use calculator
                             
                             delta = (st.session_state.checkin - dead_date).days
                             st.session_state.cancel_days = max(1, delta)
