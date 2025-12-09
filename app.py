@@ -26,6 +26,20 @@ except Exception:
 
 # --- 2. AI FUNCTIONS ---
 
+def get_hotel_suggestions(query):
+    """Uses Gemini to guess the full hotel name."""
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = f"""
+    The user is searching for a hotel. Input: "{query}".
+    Return a JSON list of the 3 most likely FULL OFFICIAL hotel names.
+    Return JSON ONLY: ["Name 1", "Name 2", "Name 3"]
+    """
+    try:
+        response = model.generate_content(prompt)
+        clean_text = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_text)
+    except: return []
+
 def extract_details_from_pdf(pdf_file):
     try:
         pdf_reader = pypdf.PdfReader(pdf_file)
@@ -35,46 +49,34 @@ def extract_details_from_pdf(pdf_file):
             
         model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = f"""
-        Extract booking details from text. Return JSON ONLY. Use null if not found.
+        Extract booking details. Return JSON ONLY. Use null if not found.
         Text: {text[:10000]}
-        Required JSON Structure:
+        Structure:
         {{
-            "hotel_name": "Name of hotel",
-            "city": "City name",
-            "guest_name": "Lead guest name",
-            "confirmation_no": "Booking/Confirmation reference number",
-            "checkin_date": "YYYY-MM-DD",
-            "checkout_date": "YYYY-MM-DD",
-            "room_type": "Room category description",
-            "adults": 2, 
-            "meal_plan": "Breakfast Only/Room Only/etc",
-            "is_refundable": true/false,
-            "cancel_deadline": "YYYY-MM-DD (if found)"
+            "hotel_name": "Name", "city": "City", "guest_name": "Name",
+            "confirmation_no": "Ref", "checkin_date": "YYYY-MM-DD",
+            "checkout_date": "YYYY-MM-DD", "room_type": "Type",
+            "adults": 2, "meal_plan": "Plan",
+            "is_refundable": true/false, "cancel_deadline": "YYYY-MM-DD",
+            "room_size": "Size string if found (e.g. 35 sqm)" 
         }}
         """
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
+        return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
     except: return None
 
 def fetch_hotel_details(hotel_name, city, room_type):
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
-    Get details for hotel: "{hotel_name}" in "{city}", room: "{room_type}".
+    Get details for hotel: "{hotel_name}" in "{city}".
     Return JSON ONLY:
     {{
-        "address_line_1": "Street address",
-        "address_line_2": "City, Zip, Country",
-        "phone": "International format phone number",
-        "checkin_time": "Standard checkin time (e.g. 3:00 PM)",
-        "checkout_time": "Standard checkout time (e.g. 11:00 AM)",
-        "room_size": "Room size in sqm or sqft (e.g. 35 sqm / 376 sqft)"
+        "address_line_1": "Street", "address_line_2": "City, Zip, Country",
+        "phone": "Intl format", "checkin_time": "3:00 PM",
+        "checkout_time": "11:00 AM"
     }}
     """
     try:
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
+        return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
     except: return None
 
 def fetch_image_url(query):
@@ -92,282 +94,210 @@ def download_image(url):
         if response.status_code == 200: return io.BytesIO(response.content)
     except: return None
 
-# --- 3. PDF GENERATION (Adjusted Spacing) ---
+# --- 3. PDF GENERATION ---
 def draw_voucher_page(c, width, height, data, hotel_info, img_exterior, img_room, current_conf_no, room_index, total_rooms):
-    odaduu_blue = Color(0.05, 0.15, 0.35)
-    odaduu_orange = Color(1, 0.4, 0)
-    text_color = Color(0.2, 0.2, 0.2)
-    label_color = Color(0.1, 0.1, 0.1)
-    
-    left_margin = 40
-    right_margin = width - 40
-    center_x = width / 2
+    odaduu_blue = Color(0.05, 0.15, 0.35); odaduu_orange = Color(1, 0.4, 0)
+    text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
+    left = 40; center_x = width / 2
     
     # Watermark
     try:
-        c.saveState()
-        c.setFillAlpha(0.04)
-        wm_width = 400; wm_height = 150 
-        c.drawImage("logo.png", center_x - (wm_width/2), height/2 - (wm_height/2), width=wm_width, height=wm_height, mask='auto', preserveAspectRatio=True)
+        c.saveState(); c.setFillAlpha(0.04)
+        c.drawImage("logo.png", center_x - 200, height/2 - 75, width=400, height=150, mask='auto', preserveAspectRatio=True)
         c.restoreState()
     except: pass
 
     # Header
-    try:
-        logo_w = 160; logo_h = 55
-        c.drawImage("logo.png", center_x - (logo_w/2), height - 75, width=logo_w, height=logo_h, mask='auto', preserveAspectRatio=True)
-    except:
-        c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(center_x, height - 60, "ODADUU TRAVEL DMC")
+    try: c.drawImage("logo.png", center_x - 80, height - 75, width=160, height=55, mask='auto', preserveAspectRatio=True)
+    except: c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(center_x, height - 60, "ODADUU TRAVEL DMC")
 
     c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 16)
-    title_text = "HOTEL CONFIRMATION VOUCHER"
-    if total_rooms > 1: title_text += f" (Room {room_index} of {total_rooms})"
-    c.drawCentredString(center_x, height - 100, title_text)
+    title = "HOTEL CONFIRMATION VOUCHER" + (f" (Room {room_index}/{total_rooms})" if total_rooms > 1 else "")
+    c.drawCentredString(center_x, height - 100, title)
 
-    def draw_row(y_pos, label, value, bold_value=False):
-        c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y_pos, label)
-        c.setFillColor(text_color); c.setFont("Helvetica-Bold" if bold_value else "Helvetica", 10)
-        c.drawString(left_margin + 120, y_pos, str(value))
-        return y_pos - 14
+    def row(y, label, val, bold=False):
+        c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, label)
+        c.setFillColor(text_color); c.setFont("Helvetica-Bold" if bold else "Helvetica", 10)
+        c.drawString(left + 120, y, str(val)); return y - 14
 
-    current_y = height - 135
+    y = height - 135
+    # Guest
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Guest Information")
+    y -= 6; c.setStrokeColor(lightgrey); c.line(left, y, width-40, y); y -= 15
+    y = row(y, "Guest Name:", data['guest_name'], True)
+    y = row(y, "Confirmation No.:", current_conf_no, True)
+    y = row(y, "Booking Date:", datetime.now().strftime("%d %b %Y"))
+    y -= 8
 
-    # --- Sections ---
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Guest Information")
-    current_y -= 6; c.setStrokeColor(lightgrey); c.line(left_margin, current_y, right_margin, current_y); current_y -= 15
-
-    current_y = draw_row(current_y, "Guest Name:", data['guest_name'], bold_value=True)
-    current_y = draw_row(current_y, "Confirmation No.:", current_conf_no, bold_value=True)
-    current_y = draw_row(current_y, "Booking Date:", datetime.now().strftime("%d %b %Y"))
-    current_y -= 8
-
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Hotel Details")
-    current_y -= 6; c.line(left_margin, current_y, right_margin, current_y); current_y -= 15
-
-    c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "Hotel:")
-    c.setFillColor(text_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin + 120, current_y, data['hotel_name']); current_y -= 14
-    
-    c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "Address:")
+    # Hotel
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Hotel Details")
+    y -= 6; c.line(left, y, width-40, y); y -= 15
+    c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Hotel:")
+    c.setFillColor(text_color); c.setFont("Helvetica-Bold", 10); c.drawString(left + 120, y, data['hotel_name']); y -= 14
+    c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Address:")
     c.setFillColor(text_color); c.setFont("Helvetica", 10)
-    addr1 = hotel_info.get("address_line_1", "")
-    addr2 = hotel_info.get("address_line_2", "")
-    c.drawString(left_margin + 120, current_y, addr1); current_y -= 12
-    if addr2: c.drawString(left_margin + 120, current_y, addr2); current_y -= 14
-    else: current_y -= 2
-    
-    current_y = draw_row(current_y, "Phone:", hotel_info.get("phone", ""))
-    
-    c_in = data['checkin'].strftime("%d %b %Y")
-    c_out = data['checkout'].strftime("%d %b %Y")
-    nights = (data['checkout'] - data['checkin']).days
-    current_y = draw_row(current_y, "Check-In:", c_in)
-    current_y = draw_row(current_y, "Check-Out:", c_out)
-    current_y = draw_row(current_y, "Nights:", str(nights))
-    current_y -= 8
+    c.drawString(left + 120, y, hotel_info.get("address_line_1", "")); y -= 12
+    if hotel_info.get("address_line_2"): c.drawString(left + 120, y, hotel_info.get("address_line_2", "")); y -= 14
+    else: y -= 2
+    y = row(y, "Phone:", hotel_info.get("phone", ""))
+    y = row(y, "Check-In:", data['checkin'].strftime("%d %b %Y"))
+    y = row(y, "Check-Out:", data['checkout'].strftime("%d %b %Y"))
+    y = row(y, "Nights:", str((data['checkout'] - data['checkin']).days))
+    y -= 8
 
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, current_y, "Room Information")
-    current_y -= 6; c.line(left_margin, current_y, right_margin, current_y); current_y -= 15
+    # Room
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Room Information")
+    y -= 6; c.line(left, y, width-40, y); y -= 15
+    y = row(y, "Room Type:", data['room_type'])
+    y = row(y, "No. of Pax:", f"{data['adults']} Adults")
+    y = row(y, "Meal Plan:", data['meal_plan'])
+    
+    # --- LOGIC: Only show Room Size if user entered it ---
+    if data.get('room_size'):
+        y = row(y, "Room Size:", data['room_size'])
+        
+    y = row(y, "Cancellation:", data['policy_text'], "Refundable" in data['policy_text'])
+    y -= 8
 
-    current_y = draw_row(current_y, "Room Type:", data['room_type'])
-    current_y = draw_row(current_y, "No. of Pax:", f"{data['adults']} Adults")
-    current_y = draw_row(current_y, "Meal Plan:", data['meal_plan'])
-    current_y = draw_row(current_y, "Room Size:", hotel_info.get("room_size", "N/A"))
-    
-    is_refundable = "Refundable" in data['policy_text']
-    current_y = draw_row(current_y, "Cancellation:", data['policy_text'], bold_value=is_refundable)
-    
-    # --- Images ---
-    current_y -= 8
-    img_height = 110 
-    img_width = 200
-    img_y_pos = current_y - img_height
-    
+    # Images
+    img_h = 110; img_w = 200; img_y = y - img_h
     if img_exterior:
-        try: c.drawImage(img_exterior, left_margin, img_y_pos, width=img_width, height=img_height)
+        try: c.drawImage(img_exterior, left, img_y, width=img_w, height=img_h)
         except: pass
     if img_room:
-        try: c.drawImage(img_room, left_margin + img_width + 10, img_y_pos, width=img_width, height=img_height)
+        try: c.drawImage(img_room, left + img_w + 10, img_y, width=img_w, height=img_h)
         except: pass
-        
-    current_y = img_y_pos - 25
+    y = img_y - 25
 
-    # --- Policies ---
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, current_y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); current_y -= 15
-    
-    table_data = [
-        ["Policy", "Time / Detail"],
-        ["Standard Check-in Time:", hotel_info.get("checkin_time", "3:00 PM")],
-        ["Standard Check-out Time:", hotel_info.get("checkout_time", "11:00 AM")],
-        ["Early Check-in/Late Out:", "Subject to availability. Request upon arrival."],
-        ["Required at Check-in:", "Passport & Credit Card/Cash Deposit."]
-    ]
-    table = Table(table_data, colWidths=[140, 370])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), odaduu_blue), ('TEXTCOLOR', (0,0), (-1,0), Color(1,1,1)),
-        ('ALIGN', (0,0), (-1,-1), 'LEFT'), ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,0), 9), ('BOTTOMPADDING', (0,0), (-1,0), 6),
-        ('BACKGROUND', (0,1), (-1,-1), Color(0.95,0.95,0.95)), ('GRID', (0,0), (-1,-1), 0.5, Color(0.8,0.8,0.8)),
-        ('FONTNAME', (0,1), (-1,-1), 'Helvetica'), ('FONTSIZE', (0,1), (-1,-1), 8), ('PADDING', (0,0), (-1,-1), 4)
-    ]))
-    w, h = table.wrapOn(c, width, height)
-    table.drawOn(c, left_margin, current_y - h)
-    
-    # --- INCREASED SPACING HERE ---
-    # Changed from 15 to 30 to give more breathing room
-    current_y -= (h + 30) 
+    # Policy
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y -= 15
+    data_t = [["Policy", "Time / Detail"], ["Check-in:", hotel_info.get("checkin_time", "3PM")], 
+              ["Check-out:", hotel_info.get("checkout_time", "11AM")], ["Required:", "Passport & Deposit"]]
+    t = Table(data_t, colWidths=[100, 410])
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),odaduu_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)),
+                           ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),4)]))
+    t.wrapOn(c, width, height); t.drawOn(c, left, y - 50); y -= (50 + 30)
 
-    # --- T&C ---
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, current_y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); current_y -= 10
-    tnc_lines = [
-        "1. Voucher Validity: Valid only for dates/services specified.",
-        f"2. Identification: Lead guest ({data['guest_name']}) must be present with valid Passport.",
-        "3. No-Show Policy: Failure to check in may result in a fee equivalent to full stay cost.",
-        "4. Incidentals: Mini-bar, laundry, etc., must be settled directly.",
-        f"5. Occupancy: Confirmed for {data['adults']} Adults. Changes may incur extra charges.",
-        "6. Hotel Rights: Hotel may refuse admission for inappropriate conduct.",
-        "7. Liability: Hotel not responsible for lost valuables unless in safety deposit box.",
-        "8. Non-Transferable: Booking cannot be resold or transferred.",
-        "9. City Tax: City tax (if any) has to be paid and settled directly at the hotel."
-    ]
-    c.setFillColor(text_color); c.setFont("Helvetica", 7)
-    for line in tnc_lines: c.drawString(left_margin, current_y, line); current_y -= 9
+    # T&C
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 10
+    tnc = ["1. Valid only for dates specified.", f"2. Lead guest ({data['guest_name']}) must be present.", 
+           "3. No-Show: Full fee applies.", "4. Incidentals settled directly.", 
+           "5. City Tax: Paid directly at hotel."]
+    c.setFillColor(text_color); c.setFont("Helvetica", 8)
+    for line in tnc: c.drawString(left, y, line); y -= 10
 
-    # --- Footer ---
+    # Footer
     c.setStrokeColor(odaduu_orange); c.setLineWidth(3); c.line(0, 45, width, 45)
-    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left_margin, 32, "Issued by: Odaduu Travel DMC")
-    c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left_margin, 20, "Email: aashwin@odaduu.jp")
+    c.setFillColor(odaduu_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Odaduu Travel DMC")
+    c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: aashwin@odaduu.jp")
 
 def generate_multipage_pdf(data, hotel_info, img_exterior_url, img_room_url, conf_numbers_list):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    img_ext_reader = ImageReader(download_image(img_exterior_url)) if img_exterior_url and download_image(img_exterior_url) else None
-    img_room_reader = ImageReader(download_image(img_room_url)) if img_room_url and download_image(img_room_url) else None
-
-    for i, conf_no in enumerate(conf_numbers_list):
-        draw_voucher_page(c, width, height, data, hotel_info, img_ext_reader, img_room_reader, conf_no, i + 1, len(conf_numbers_list))
+    img_ext = ImageReader(download_image(img_exterior_url)) if img_exterior_url and download_image(img_exterior_url) else None
+    img_room = ImageReader(download_image(img_room_url)) if img_room_url and download_image(img_room_url) else None
+    for i, conf in enumerate(conf_numbers_list):
+        draw_voucher_page(c, width, height, data, hotel_info, img_ext, img_room, conf, i+1, len(conf_numbers_list))
         c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
+    c.save(); buffer.seek(0); return buffer
 
 # --- 4. UI LOGIC ---
+if 'form_data' not in st.session_state: st.session_state.form_data = {}
+def get_val(k, d): return st.session_state.form_data.get(k, d)
 
-if 'form_data' not in st.session_state:
-    st.session_state.form_data = {}
+st.title("🏯 Odaduu Voucher Generator")
 
-st.title("🏯 Odaduu Voucher Generator (Auto-Fill)")
+# === SMART SEARCH ===
+st.markdown("### 🏨 Find Hotel (Auto-Correct)")
+col_search, col_res = st.columns([2, 1])
+with col_search:
+    search_q = st.text_input("Type partial hotel name & press Enter (e.g. 'Centara Osaka')", key="search_box")
+if search_q:
+    with col_res:
+        with st.spinner("Finding..."):
+            suggestions = get_hotel_suggestions(search_q)
+            if suggestions:
+                selected_hotel = st.radio("Select Correct Hotel:", suggestions)
+                if selected_hotel:
+                    st.session_state.form_data['hotel_name'] = selected_hotel
+                    st.success("Selected!")
 
-# --- UPLOAD SECTION ---
-st.markdown("### 📤 Step 1: Upload Supplier Voucher (Optional)")
-uploaded_file = st.file_uploader("Drop a PDF here to auto-fill details", type="pdf")
-
-if uploaded_file:
-    if st.session_state.get('last_uploaded') != uploaded_file.name:
-        with st.spinner("🔍 Reading PDF..."):
+# === UPLOAD ===
+with st.expander("📤 Upload Supplier Voucher (Optional)", expanded=False):
+    uploaded_file = st.file_uploader("Drop PDF here", type="pdf")
+    if uploaded_file and st.session_state.get('last_uploaded') != uploaded_file.name:
+        with st.spinner("Reading PDF..."):
             extracted = extract_details_from_pdf(uploaded_file)
             if extracted:
-                st.session_state.form_data = extracted
+                st.session_state.form_data.update(extracted)
                 st.session_state.last_uploaded = uploaded_file.name
-                st.success("Data Extracted! Please verify below.")
-            else:
-                st.error("Could not extract data from PDF.")
+                st.success("Data Extracted!")
 
-def get_val(key, default):
-    return st.session_state.form_data.get(key, default)
-
-# --- FORM SECTION ---
-st.markdown("### 📝 Step 2: Verify & Edit Details")
+# === FORM ===
+st.markdown("### 📝 Booking Details")
 col1, col2 = st.columns(2)
-
 with col1:
     hotel_name = st.text_input("Hotel Name", value=get_val("hotel_name", ""))
     city = st.text_input("City", value=get_val("city", "Osaka"))
     guest_name = st.text_input("Lead Guest Name", value=get_val("guest_name", ""))
     
     st.subheader("Room Details")
-    num_rooms = st.number_input("Number of Rooms", min_value=1, value=1)
-    
+    num_rooms = st.number_input("Number of Rooms", 1, value=1)
     conf_numbers = []
     default_conf = get_val("confirmation_no", "")
-    
     if num_rooms > 1:
-        same_conf = st.checkbox("Use same Confirmation No. for all rooms?", value=True)
-        if same_conf:
-            main_conf = st.text_input("Confirmation No (All Rooms)", value=default_conf)
+        if st.checkbox("Same Confirmation No?", True):
+            main_conf = st.text_input("Confirmation No (All)", value=default_conf)
             conf_numbers = [main_conf] * num_rooms
         else:
-            for i in range(num_rooms):
-                conf = st.text_input(f"Room {i+1} Confirmation No", key=f"conf_{i}", value=default_conf)
-                conf_numbers.append(conf)
-    else:
-        conf = st.text_input("Confirmation No", value=default_conf)
-        conf_numbers.append(conf)
+            for i in range(num_rooms): conf_numbers.append(st.text_input(f"Room {i+1} Conf No", value=default_conf))
+    else: conf_numbers.append(st.text_input("Confirmation No", value=default_conf))
 
-    st.subheader("Cancellation Policy")
-    default_policy = "Refundable" if get_val("is_refundable", False) else "Non-Refundable"
-    policy_type = st.radio("Is this booking refundable?", ["Non-Refundable", "Refundable"], index=0 if default_policy=="Non-Refundable" else 1, horizontal=True)
+    st.subheader("Policy")
+    def_pol = "Refundable" if get_val("is_refundable", False) else "Non-Refundable"
+    policy_type = st.radio("Refundable?", ["Non-Refundable", "Refundable"], index=0 if def_pol=="Non-Refundable" else 1, horizontal=True)
 
 with col2:
-    try:
-        def_checkin = datetime.strptime(get_val("checkin_date", ""), "%Y-%m-%d").date()
-        def_checkout = datetime.strptime(get_val("checkout_date", ""), "%Y-%m-%d").date()
-    except:
-        def_checkin = datetime.now().date()
-        def_checkout = datetime.now().date() + timedelta(days=1)
-
-    checkin = st.date_input("Check-In Date", value=def_checkin)
-    checkout = st.date_input("Check-Out Date", value=def_checkout)
+    try: d_in = datetime.strptime(get_val("checkin_date",""),"%Y-%m-%d").date()
+    except: d_in = datetime.now().date()
+    try: d_out = datetime.strptime(get_val("checkout_date",""),"%Y-%m-%d").date()
+    except: d_out = d_in + timedelta(days=1)
     
+    checkin = st.date_input("Check-In", value=d_in)
+    checkout = st.date_input("Check-Out", value=d_out)
     room_type = st.text_input("Room Type", value=get_val("room_type", ""))
-    adults = st.number_input("No. of Adults (Per Room)", min_value=1, value=get_val("adults", 2))
+    adults = st.number_input("Adults", 1, value=get_val("adults", 2))
     
-    meal_plan_val = get_val("meal_plan", "Breakfast Only")
-    options = ["Breakfast Only", "Room Only", "Half Board", "Full Board"]
-    idx = 0
-    if meal_plan_val in options: idx = options.index(meal_plan_val)
-    meal_plan = st.selectbox("Meal Plan", options, index=idx)
+    # --- MANUAL ROOM SIZE INPUT ---
+    # Using .get() ensures it doesn't crash if the key is missing
+    room_size_val = get_val("room_size", "")
+    room_size = st.text_input("Room Size (Optional - e.g. 35 sqm)", value=room_size_val, help="Leave blank to hide this line in the PDF")
+    
+    opts = ["Breakfast Only", "Room Only", "Half Board", "Full Board"]
+    def_meal = get_val("meal_plan", "Breakfast Only")
+    meal_plan = st.selectbox("Meal Plan", opts, index=opts.index(def_meal) if def_meal in opts else 0)
     
     if policy_type == "Refundable":
-        extracted_deadline = get_val("cancel_deadline", None)
-        default_days = 3
-        if extracted_deadline:
-            try:
-                d_date = datetime.strptime(extracted_deadline, "%Y-%m-%d").date()
-                diff = (checkin - d_date).days
-                if diff > 0: default_days = diff
-            except: pass
-            
-        cancel_days = st.number_input("Free cancellation until how many days before?", min_value=1, value=default_days)
-        deadline_date = checkin - timedelta(days=cancel_days)
-        policy_text = f"Free Cancellation until {deadline_date.strftime('%d %b %Y')}"
-        st.info(f"Voucher will say: **{policy_text}**")
-    else:
-        policy_text = "Non-Refundable & Non-Amendable"
+        days = st.number_input("Free cancel days before?", 1, 3)
+        policy_text = f"Free Cancellation until {(checkin - timedelta(days=days)).strftime('%d %b %Y')}"
+        st.info(f"Voucher says: {policy_text}")
+    else: policy_text = "Non-Refundable & Non-Amendable"
 
 if st.button("✨ Generate Voucher", type="primary"):
-    if not hotel_name or not guest_name:
-        st.warning("Please fill in Hotel Name and Guest Name.")
+    if not hotel_name: st.warning("Enter Hotel Name")
     else:
-        with st.status("🤖 AI Agent Working...") as status:
-            status.write(f"Fetching details for {hotel_name}...")
-            hotel_info = fetch_hotel_details(hotel_name, city, room_type)
-            
-            status.write("Searching for hotel images...")
-            img_ext = fetch_image_url(f"{hotel_name} {city} hotel exterior building")
+        with st.status("Working...") as status:
+            status.write(f"Fetching info for {hotel_name}...")
+            info = fetch_hotel_details(hotel_name, city, room_type)
+            status.write("Finding images...")
+            img_ext = fetch_image_url(f"{hotel_name} {city} hotel exterior")
             img_room = fetch_image_url(f"{hotel_name} {city} {room_type} interior")
             
-            status.write("Generating PDF...")
-            if hotel_info:
-                user_data = {
-                    "hotel_name": hotel_name, "guest_name": guest_name,
-                    "checkin": checkin, "checkout": checkout,
-                    "room_type": room_type, "adults": adults,
-                    "meal_plan": meal_plan, "policy_text": policy_text
-                }
-                pdf_file = generate_multipage_pdf(user_data, hotel_info, img_ext, img_room, conf_numbers)
-                
-                status.update(label="✅ Voucher Ready!", state="complete")
-                st.download_button(label="⬇️ Download PDF Voucher", data=pdf_file, file_name=f"Voucher_{guest_name.replace(' ', '_')}.pdf", mime="application/pdf")
-            else:
-                status.update(label="❌ Failed to fetch details", state="error")
+            data = {"hotel_name": hotel_name, "guest_name": guest_name, "checkin": checkin, "checkout": checkout, 
+                    "room_type": room_type, "adults": adults, "meal_plan": meal_plan, 
+                    "policy_text": policy_text, "room_size": room_size} # Pass room_size
+            pdf = generate_multipage_pdf(data, info, img_ext, img_room, conf_numbers)
+            
+            status.update(label="Done!", state="complete")
+            st.download_button("⬇️ Download PDF", pdf, f"Voucher_{guest_name.replace(' ','_')}.pdf", "application/pdf")
