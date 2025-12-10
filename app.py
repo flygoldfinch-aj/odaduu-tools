@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import io
 import json
 import pypdf
-from reportlab.lib.utils import ImageReader # Ensure ImageReader is available
+from reportlab.lib.utils import ImageReader
 import textwrap
 from math import sin, cos, radians
 import re
@@ -84,29 +84,41 @@ def parse_smart_date(date_str):
     clean_str = re.sub(r'\bSept\b', 'Sep', clean_str, flags=re.IGNORECASE)
     clean_str = re.sub(r'\bSeptember\b', 'Sep', clean_str, flags=re.IGNORECASE)
     
-    formats = ["%d %b %Y", "%Y-%m-%d", "%d %B %Y"]
+    formats = [
+        "%d %b %Y",     # 28 Sep 2025
+        "%Y-%m-%d",     # 2025-09-28
+        "%d %B %Y",     # 28 September 2025
+    ]
     
     for fmt in formats:
-        try: return datetime.strptime(clean_str, fmt).date()
-        except ValueError: continue
+        try:
+            return datetime.strptime(clean_str, fmt).date()
+        except ValueError:
+            continue
     return None
 
 def clean_room_type_string(raw_type):
-    """Removes residual JSON/quote garbage from room type extraction."""
-    if not isinstance(raw_type, str): return raw_type
+    """
+    CLEANUP FIX: Removes residual JSON/quote garbage from room type extraction.
+    Ensures a clean string is always returned.
+    """
+    if not isinstance(raw_type, str): return str(raw_type)
     
-    # Remove literal JSON artifacts like {"room_name": "..."}
-    if raw_type.startswith('{"') and raw_type.endswith('"}'):
+    # 1. Attempt to parse raw JSON string output by AI (e.g., '{"room_name": "..."}')
+    if raw_type.strip().startswith(('{', '[')) and raw_type.strip().endswith(('}', ']')):
         try:
-            temp_json = json.loads(raw_type)
-            # Try to grab the value of the first key (which is often 'room_name')
-            return list(temp_json.values())[0].strip('\'\" ')
+            temp_data = json.loads(raw_type)
+            # If it's a dict, take the value of the first key (which should be the name)
+            if isinstance(temp_data, dict):
+                raw_type = list(temp_data.values())[0]
+            # If it's a list, take the first element's value (less common)
+            elif isinstance(temp_data, list) and temp_data:
+                raw_type = temp_data[0]
         except json.JSONDecodeError:
-            # If not proper JSON, clean standard quotation marks
-            pass
-            
-    # General cleanup (remove leading/trailing quotes and brackets)
-    return raw_type.strip().strip('\'"{} ')
+            pass # Not valid JSON, proceed to next step
+    
+    # 2. General cleanup (remove leading/trailing quotes, brackets, and spaces)
+    return str(raw_type).strip().strip('\'"{}[] ')
 
 # --- 4. AI FUNCTIONS ---
 
@@ -349,11 +361,9 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
                         
-                        # --- FINAL FIX FOR ROOM TYPE STRING ---
+                        # --- FIX: Clean Room Type String ---
                         raw_room_type = rooms[0].get('room_type', '')
-                        cleaned_room_type = clean_room_type_string(raw_room_type)
-                        
-                        st.session_state.room_type = cleaned_room_type # Set the clean value
+                        st.session_state.room_type = clean_room_type_string(raw_room_type)
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
@@ -376,9 +386,19 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                             
                             delta = (st.session_state.checkin - dead_date).days
                             st.session_state.cancel_days = max(1, delta)
+                        else:
+                            st.session_state.policy_type = 'Non-Refundable'
+                            st.session_state.policy_text_manual = 'Non-Refundable & Non-Amendable'
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
                         st.session_state.policy_text_manual = 'Non-Refundable & Non-Amendable'
+
+                    # CRITICAL FIX 2: Set selectbox to the correct value after loading options
+                    # If the extracted type is in the options, select it. If not, the current st.session_state.room_type (which holds the extracted string) will be used for the manual box.
+                    if st.session_state.room_type in st.session_state.room_options:
+                        st.session_state.room_sel = st.session_state.room_type
+                    else:
+                        st.session_state.room_sel = 'Manual...'
 
                     st.session_state.last_uploaded_file = up_file.name
                     st.success("New Booking Loaded!")
@@ -433,31 +453,32 @@ with c2:
     st.date_input("Check-In", key="checkin")
     st.date_input("Check-Out", key="checkout", min_value=min_out)
     
+    # ROOM TYPE LOGIC
     opts = st.session_state.room_options.copy()
-    current = st.session_state.room_type
+    current_room_name = st.session_state.room_type
     
-    if current and current not in opts: 
-        opts.insert(0, current)
+    # Ensure current room name is in the options list if it's not 'Manual...'
+    if current_room_name and current_room_name not in opts: 
+        opts.insert(0, current_room_name)
         
     opts.append("Manual...")
     
     def on_room_change():
         if st.session_state.room_sel != "Manual...": 
             st.session_state.room_type = st.session_state.room_sel
-            
-    idx = 0
-    if current in opts: idx = opts.index(current)
-    
-    # FINAL FIX: Initialize selectbox key value to ensure correct initial selection
-    if st.session_state.room_type and st.session_state.room_type != st.session_state.room_sel:
-        st.session_state.room_sel = st.session_state.room_type
+        # If Manual is selected, the room_type is updated by the text input below
 
+    # Determine index for pre-selection
+    idx = opts.index(st.session_state.room_sel) if st.session_state.room_sel in opts else 0
+    
     st.selectbox("Room Type", opts, index=idx, key="room_sel", on_change=on_room_change)
+    
+    # Conditional Manual Input
     if st.session_state.get("room_sel") == "Manual...": 
-        # If manual is selected, the final room type is taken from this text input
-        st.text_input("Type Name", value=st.session_state.room_type, key="room_type")
+        # When manual, set the actual room_type from the text input
+        st.text_input("Type Name", value=current_room_name, key="room_type")
     else:
-        # If standard is selected, ensure the final room type tracks the dropdown
+        # When standard, the room_type is already set by on_room_change
         st.session_state.room_type = st.session_state.room_sel
 
 
