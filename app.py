@@ -9,8 +9,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime, timedelta
 import io
 import json
-from reportlab.lib.utils import ImageReader
 import pypdf
+from reportlab.lib.utils import ImageReader # Ensure ImageReader is available
 import textwrap
 from math import sin, cos, radians
 import re
@@ -84,18 +84,29 @@ def parse_smart_date(date_str):
     clean_str = re.sub(r'\bSept\b', 'Sep', clean_str, flags=re.IGNORECASE)
     clean_str = re.sub(r'\bSeptember\b', 'Sep', clean_str, flags=re.IGNORECASE)
     
-    formats = [
-        "%d %b %Y",     # 28 Sep 2025
-        "%Y-%m-%d",     # 2025-09-28
-        "%d %B %Y",     # 28 September 2025
-    ]
+    formats = ["%d %b %Y", "%Y-%m-%d", "%d %B %Y"]
     
     for fmt in formats:
-        try:
-            return datetime.strptime(clean_str, fmt).date()
-        except ValueError:
-            continue
+        try: return datetime.strptime(clean_str, fmt).date()
+        except ValueError: continue
     return None
+
+def clean_room_type_string(raw_type):
+    """Removes residual JSON/quote garbage from room type extraction."""
+    if not isinstance(raw_type, str): return raw_type
+    
+    # Remove literal JSON artifacts like {"room_name": "..."}
+    if raw_type.startswith('{"') and raw_type.endswith('"}'):
+        try:
+            temp_json = json.loads(raw_type)
+            # Try to grab the value of the first key (which is often 'room_name')
+            return list(temp_json.values())[0].strip('\'\" ')
+        except json.JSONDecodeError:
+            # If not proper JSON, clean standard quotation marks
+            pass
+            
+    # General cleanup (remove leading/trailing quotes and brackets)
+    return raw_type.strip().strip('\'"{} ')
 
 # --- 4. AI FUNCTIONS ---
 
@@ -337,7 +348,13 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
-                        st.session_state.room_type = rooms[0].get('room_type', '')
+                        
+                        # --- FINAL FIX FOR ROOM TYPE STRING ---
+                        raw_room_type = rooms[0].get('room_type', '')
+                        cleaned_room_type = clean_room_type_string(raw_room_type)
+                        
+                        st.session_state.room_type = cleaned_room_type # Set the clean value
+                        
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                             st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
@@ -355,7 +372,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         dead_date = parse_smart_date(dead_raw)
                         if dead_date:
                             st.session_state.policy_type = 'Refundable'
-                            st.session_state.policy_text_manual = '' # Force calculator logic
+                            st.session_state.policy_text_manual = '' 
                             
                             delta = (st.session_state.checkin - dead_date).days
                             st.session_state.cancel_days = max(1, delta)
@@ -425,7 +442,8 @@ with c2:
     opts.append("Manual...")
     
     def on_room_change():
-        if st.session_state.room_sel != "Manual...": st.session_state.room_type = st.session_state.room_sel
+        if st.session_state.room_sel != "Manual...": 
+            st.session_state.room_type = st.session_state.room_sel
             
     idx = 0
     if current in opts: idx = opts.index(current)
@@ -435,8 +453,14 @@ with c2:
         st.session_state.room_sel = st.session_state.room_type
 
     st.selectbox("Room Type", opts, index=idx, key="room_sel", on_change=on_room_change)
-    if st.session_state.get("room_sel") == "Manual...": st.text_input("Type Name", key="room_type")
-    
+    if st.session_state.get("room_sel") == "Manual...": 
+        # If manual is selected, the final room type is taken from this text input
+        st.text_input("Type Name", value=st.session_state.room_type, key="room_type")
+    else:
+        # If standard is selected, ensure the final room type tracks the dropdown
+        st.session_state.room_type = st.session_state.room_sel
+
+
     st.number_input("Adults", 1, key="adults")
     st.text_input("Size (Optional)", key="room_size")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
