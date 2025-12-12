@@ -25,7 +25,7 @@ try:
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
-    # st.stop() # Keep commented for local testing ease
+    # st.stop() 
 
 # --- 2. SESSION STATE MANAGEMENT (UPDATED HERE) ---
 def init_state():
@@ -42,7 +42,7 @@ def init_state():
         'policy_text_manual': '',
         'search_query': '',
         'room_sel': '',
-        'temp_extracted_name': '' # <--- NEW KEY FOR AI EXTRACTION
+        'temp_extracted_name': '' # <--- DEDICATED KEY FOR AI EXTRACTION
     }
     
     for i in range(10):
@@ -97,7 +97,7 @@ def parse_smart_date(date_str):
     return None
 
 def is_valid_room_name(name):
-    """STRICT VALIDATION to ignore polluted strings."""
+    """STRICT VALIDATION: Checks if a room name contains obvious pollution."""
     if not isinstance(name, str) or not name:
         return False
     # Check for known pollutants: braces, colons, quotes (single/double), brackets
@@ -105,7 +105,7 @@ def is_valid_room_name(name):
         return False
     return True
 
-# --- 4. AI FUNCTIONS (No change) ---
+# --- 4. AI FUNCTIONS ---
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -457,9 +457,10 @@ with c2:
             st.session_state.room_type = st.session_state.room_sel
             
     idx = 0
-    # Use the extracted_room_temp to set the index if it exists and is valid
+    # Use the temporary key to set the correct index if it's the valid extracted value
     if st.session_state.temp_extracted_name and st.session_state.temp_extracted_name in opts: 
         idx = opts.index(st.session_state.temp_extracted_name)
+        st.session_state.room_type = st.session_state.temp_extracted_name 
     elif current_room_name in opts:
         idx = opts.index(current_room_name)
     
@@ -517,4 +518,4 @@ if st.button("Generate Voucher", type="primary"):
         pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_list)
         
     st.success("Done!")
-    st.download_button("Download PDF", pdf_bytes, "Voucher.pdf", "application/pdf")<ctrl46>}
+    st.download_button("Download PDF", pdf_bytes, "Voucher.pdf", "application/pdf")
