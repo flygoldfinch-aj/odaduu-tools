@@ -13,13 +13,12 @@ import pypdf
 from reportlab.lib.utils import ImageReader
 from math import sin, cos, radians
 import re
-import pandas as pd # Added for completeness, though not strictly used in hotel app
+import pandas as pd 
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Fly Goldfinch Voucher Generator", page_icon="✈️", layout="wide")
 
 try:
-    # Use the same API keys
     GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
     SEARCH_KEY = st.secrets["SEARCH_API_KEY"]
     SEARCH_CX = st.secrets["SEARCH_ENGINE_ID"]
@@ -42,7 +41,8 @@ def init_state():
         'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
         'policy_text_manual': '',
         'search_query': '',
-        'room_sel': ''
+        'room_sel': '',
+        'extracted_room_temp': '' # <--- NEW DEDICATED KEY
     }
     
     for i in range(10):
@@ -68,6 +68,7 @@ def reset_booking_state():
     st.session_state.policy_text_manual = ''
     st.session_state.suggestions = []
     st.session_state.room_sel = '' 
+    st.session_state.extracted_room_temp = '' # <--- NEW RESET
     
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
@@ -78,7 +79,7 @@ def reset_booking_state():
         st.session_state.search_input = ""
     st.session_state.search_query = ""
 
-# --- 3. HELPER FUNCTIONS (NEW VALIDATION ADDED) ---
+# --- 3. HELPER FUNCTIONS ---
 
 def parse_smart_date(date_str):
     """Parses various date strings into datetime.date objects."""
@@ -96,18 +97,16 @@ def parse_smart_date(date_str):
     return None
 
 def is_valid_room_name(name):
-    """
-    STRICT VALIDATION: Checks if a room name contains obvious pollution (quotes, brackets, colons, etc.) 
-    that break the UI.
-    """
+    """STRICT VALIDATION to ignore polluted strings."""
     if not isinstance(name, str) or not name:
         return False
-    # Check for known pollutants that Gemini often inserts in error: braces, colons, quotes (single/double), brackets
+    # Check for known pollutants: braces, colons, quotes (single/double), brackets
     if re.search(r"[{}|:\"\[\]']", name):
         return False
     return True
 
 # --- 4. AI FUNCTIONS ---
+# (AI functions remain the same)
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -173,7 +172,7 @@ def fetch_hotel_details_text(hotel, city, r_type):
     except: return None
 
 def fetch_image(query):
-    # Image fetching needs Google Custom Search API, which requires SEARCH_KEY and SEARCH_CX
+    # Image fetching needs Google Custom Search API
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
                            params={"q": query, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
@@ -190,7 +189,7 @@ def get_img_reader(url):
         if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
     except: return None
 
-# --- 5. PDF DRAWING (Rebranded for Fly Goldfinch) ---
+# --- 5. PDF DRAWING (No change) ---
 
 def draw_vector_seal(c, x, y, size):
     c.saveState()
@@ -373,9 +372,11 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         if is_valid_room_name(test_name):
                             # If it passes the pollution check, use it
                             st.session_state.room_type = test_name
+                            st.session_state.extracted_room_temp = test_name # Set throwaway variable
                         else:
-                            # If it fails the pollution check (contains ':', '{', '}', etc.), ignore it.
-                            st.session_state.room_type = '' # Set to empty, preventing loop
+                            # If it fails the pollution check, IGNORE the AI value
+                            st.session_state.room_type = '' 
+                            st.session_state.extracted_room_temp = ''
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
@@ -443,7 +444,7 @@ with c2:
     st.date_input("Check-In", key="checkin")
     st.date_input("Check-Out", key="checkout", min_value=min_out)
     
-    # ROOM TYPE LOGIC
+    # ROOM TYPE LOGIC (KEY FIX APPLIED HERE)
     opts = st.session_state.room_options.copy()
     current_room_name = st.session_state.room_type
     
@@ -457,7 +458,11 @@ with c2:
             st.session_state.room_type = st.session_state.room_sel
             
     idx = 0
-    if current_room_name in opts: idx = opts.index(current_room_name)
+    # Use the extracted_room_temp to set the index if it exists and is valid
+    if st.session_state.extracted_room_temp in opts: 
+        idx = opts.index(st.session_state.extracted_room_temp)
+    elif current_room_name in opts:
+        idx = opts.index(current_room_name)
     
     # Final fix: Ensure the selectbox reflects the extracted or current room name
     if st.session_state.room_type and st.session_state.room_type != st.session_state.room_sel:
