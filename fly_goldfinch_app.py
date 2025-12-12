@@ -27,7 +27,7 @@ except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
     # st.stop() # Keep commented for local testing ease
 
-# --- 2. SESSION STATE MANAGEMENT ---
+# --- 2. SESSION STATE MANAGEMENT (UPDATED HERE) ---
 def init_state():
     defaults = {
         'hotel_name': '', 'city': '', 'lead_guest': '', 
@@ -42,7 +42,7 @@ def init_state():
         'policy_text_manual': '',
         'search_query': '',
         'room_sel': '',
-        'extracted_room_temp': '' # <--- NEW DEDICATED KEY
+        'temp_extracted_name': '' # <--- NEW KEY FOR AI EXTRACTION
     }
     
     for i in range(10):
@@ -68,7 +68,7 @@ def reset_booking_state():
     st.session_state.policy_text_manual = ''
     st.session_state.suggestions = []
     st.session_state.room_sel = '' 
-    st.session_state.extracted_room_temp = '' # <--- NEW RESET
+    st.session_state.temp_extracted_name = '' # <--- NEW RESET
     
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
@@ -105,8 +105,7 @@ def is_valid_room_name(name):
         return False
     return True
 
-# --- 4. AI FUNCTIONS ---
-# (AI functions remain the same)
+# --- 4. AI FUNCTIONS (No change) ---
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -372,11 +371,11 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         if is_valid_room_name(test_name):
                             # If it passes the pollution check, use it
                             st.session_state.room_type = test_name
-                            st.session_state.extracted_room_temp = test_name # Set throwaway variable
+                            st.session_state.temp_extracted_name = test_name # Set throwaway variable
                         else:
                             # If it fails the pollution check, IGNORE the AI value
                             st.session_state.room_type = '' 
-                            st.session_state.extracted_room_temp = ''
+                            st.session_state.temp_extracted_name = ''
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
@@ -459,8 +458,8 @@ with c2:
             
     idx = 0
     # Use the extracted_room_temp to set the index if it exists and is valid
-    if st.session_state.extracted_room_temp in opts: 
-        idx = opts.index(st.session_state.extracted_room_temp)
+    if st.session_state.temp_extracted_name and st.session_state.temp_extracted_name in opts: 
+        idx = opts.index(st.session_state.temp_extracted_name)
     elif current_room_name in opts:
         idx = opts.index(current_room_name)
     
@@ -515,7 +514,7 @@ if st.button("Generate Voucher", type="primary"):
             "policy": policy_txt, "room_size": st.session_state.room_size
         }
         
-        pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_final)
+        pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_list)
         
     st.success("Done!")
-    st.download_button("Download PDF", pdf_bytes, "Voucher.pdf", "application/pdf")
+    st.download_button("Download PDF", pdf_bytes, "Voucher.pdf", "application/pdf")<ctrl46>}
