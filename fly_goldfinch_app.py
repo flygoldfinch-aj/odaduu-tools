@@ -13,6 +13,7 @@ import pypdf
 from reportlab.lib.utils import ImageReader
 from math import sin, cos, radians
 import re
+import pandas as pd # Added for completeness, though not strictly used in hotel app
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Fly Goldfinch Voucher Generator", page_icon="✈️", layout="wide")
@@ -25,7 +26,7 @@ try:
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
-    # st.stop() # Keep stop() commented for local testing ease
+    # st.stop() # Keep commented for local testing ease
 
 # --- 2. SESSION STATE MANAGEMENT ---
 def init_state():
@@ -47,7 +48,6 @@ def init_state():
     for i in range(10):
         defaults[f'room_{i}_guest'] = ''
         defaults[f'room_{i}_conf'] = ''
-        # Initialize manual input key separately
         if f'room_type_manual_input' not in st.session_state:
             st.session_state[f'room_type_manual_input'] = '' 
 
@@ -78,7 +78,7 @@ def reset_booking_state():
         st.session_state.search_input = ""
     st.session_state.search_query = ""
 
-# --- 3. HELPER FUNCTIONS (CLEANUP FUNCTION DELETED AND LOGIC MOVED) ---
+# --- 3. HELPER FUNCTIONS (NEW VALIDATION ADDED) ---
 
 def parse_smart_date(date_str):
     """Parses various date strings into datetime.date objects."""
@@ -95,7 +95,17 @@ def parse_smart_date(date_str):
         except ValueError: continue
     return None
 
-# --- clean_room_type_string() IS DELETED ---
+def is_valid_room_name(name):
+    """
+    STRICT VALIDATION: Checks if a room name contains obvious pollution (quotes, brackets, colons, etc.) 
+    that break the UI.
+    """
+    if not isinstance(name, str) or not name:
+        return False
+    # Check for known pollutants that Gemini often inserts in error: braces, colons, quotes (single/double), brackets
+    if re.search(r"[{}|:\"\[\]']", name):
+        return False
+    return True
 
 # --- 4. AI FUNCTIONS ---
 
@@ -148,10 +158,8 @@ def extract_pdf_data(pdf_file):
         }}
         """
         raw = model.generate_content(prompt).text
-        # Use simple json.loads, cleanup will happen later in the UI logic
         return json.loads(raw.replace("```json", "").replace("```", "").strip())
     except Exception as e:
-        # print(f"Extraction error: {e}") 
         return None
 
 def fetch_hotel_details_text(hotel, city, r_type):
@@ -186,8 +194,7 @@ def get_img_reader(url):
 
 def draw_vector_seal(c, x, y, size):
     c.saveState()
-    fg_blue = Color(0.0, 0.25, 0.5) 
-    fg_gold = Color(0.9, 0.75, 0.1) 
+    fg_blue = Color(0.0, 0.25, 0.5); fg_gold = Color(0.9, 0.75, 0.1) 
     
     c.setStrokeColor(fg_blue); c.setFillColor(fg_blue); c.setFillAlpha(0.8); c.setStrokeAlpha(0.8); c.setLineWidth(1.5)
     cx, cy = x + size/2, y + size/2
@@ -219,7 +226,7 @@ def generate_pdf(data, info, imgs, rooms_list):
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
 
     for i, room in enumerate(rooms_list):
-        if i > 0: c.showPage() # Start a new page for each room
+        if i > 0: c.showPage() 
         
         # Header / Logo
         try: c.drawImage("fg_logo.png", w/2-80, h-60, 160, 55, mask='auto', preserveAspectRatio=True)
@@ -280,7 +287,7 @@ def generate_pdf(data, info, imgs, rooms_list):
             y -= (ih + 30)
         else: y -= 15
 
-        # Policies (Table drawing requires SimpleDocTemplate components for robust layout)
+        # Policies
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y-=15
         
         elements = []
@@ -288,8 +295,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         t = Table(pt, colWidths=[130, 380])
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),fg_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         
-        # Manually calculate space for the table
-        table_height = 5 * 10 # Estimated height
+        table_height = 5 * 10 
         t.drawOn(c, left, y-table_height); y -= (table_height + 15)
 
         # T&C 
@@ -310,10 +316,9 @@ def generate_pdf(data, info, imgs, rooms_list):
         
         styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
         
-        # Manually calculate and draw T&C
         tnc_start_y = y
         for line in tnc:
-            if y < 80: # If running out of space, move to next page
+            if y < 80: 
                 c.showPage(); y = h - 60; tnc_start_y = y
             
             p = Paragraph(line, styleN)
@@ -362,21 +367,15 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         
                         raw_room_type = rooms[0].get('room_type', '')
                         
-                        # Step A: Check if it's a known JSON wrapper and extract inner value
-                        try:
-                            if raw_room_type.strip().startswith(('{', '[')):
-                                extracted_val = json.loads(raw_room_type)
-                                if isinstance(extracted_val, dict):
-                                    raw_room_type = list(extracted_val.values())[0]
-                                elif isinstance(extracted_val, list):
-                                    raw_room_type = extracted_val[0]
-                        except json.JSONDecodeError:
-                            pass 
-                            
-                        # Step B: Aggressively strip all surrounding quotes/braces/brackets
-                        clean_name = str(raw_room_type).strip().strip('\'"{}[]')
+                        # Step A: Attempt to clean and validate the room type string
+                        test_name = str(raw_room_type).strip().strip('\'"{}[]')
 
-                        st.session_state.room_type = clean_name # Set the definitive clean state
+                        if is_valid_room_name(test_name):
+                            # If it passes the pollution check, use it
+                            st.session_state.room_type = test_name
+                        else:
+                            # If it fails the pollution check (contains ':', '{', '}', etc.), ignore it.
+                            st.session_state.room_type = '' # Set to empty, preventing loop
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
@@ -470,7 +469,6 @@ with c2:
     manual_input_key = "room_type_manual_input" 
 
     if st.session_state.get("room_sel") == "Manual...": 
-        # When manual is selected, the final room type is taken from this text input
         manual_val = st.text_input("Type Name", value=current_room_name, key=manual_input_key)
         st.session_state.room_type = manual_val
     else:
