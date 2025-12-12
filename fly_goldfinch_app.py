@@ -11,7 +11,6 @@ import io
 import json
 import pypdf
 from reportlab.lib.utils import ImageReader
-import textwrap
 from math import sin, cos, radians
 import re
 
@@ -26,7 +25,7 @@ try:
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
-    # st.stop() # Removed stop() for better local dev testing
+    # st.stop() # Keep stop() commented for local testing ease
 
 # --- 2. SESSION STATE MANAGEMENT ---
 def init_state():
@@ -48,6 +47,9 @@ def init_state():
     for i in range(10):
         defaults[f'room_{i}_guest'] = ''
         defaults[f'room_{i}_conf'] = ''
+        # Initialize manual input key separately
+        if f'room_type_manual_input' not in st.session_state:
+            st.session_state[f'room_type_manual_input'] = '' 
 
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -70,15 +72,16 @@ def reset_booking_state():
     for i in range(10):
         st.session_state[f'room_{i}_guest'] = ''
         st.session_state[f'room_{i}_conf'] = ''
+        st.session_state[f'room_type_manual_input'] = ''
     
     if 'search_input' in st.session_state:
         st.session_state.search_input = ""
     st.session_state.search_query = ""
 
-# --- 3. HELPER FUNCTIONS (BUG FIX APPLIED HERE) ---
+# --- 3. HELPER FUNCTIONS (CLEANUP FUNCTION DELETED AND LOGIC MOVED) ---
 
 def parse_smart_date(date_str):
-    """Parses dates like '28 Sept 2025' by fixing 'Sept' to 'Sep'."""
+    """Parses various date strings into datetime.date objects."""
     if not date_str: return None
     
     clean_str = date_str.strip()
@@ -92,34 +95,9 @@ def parse_smart_date(date_str):
         except ValueError: continue
     return None
 
-def clean_room_type_string(raw_type):
-    """
-    FIXED BUG: Aggressively cleans room type string against AI's inconsistent JSON/quote output.
-    """
-    if not isinstance(raw_type, str): return str(raw_type)
-    
-    cleaned_str = str(raw_type).strip()
+# --- clean_room_type_string() IS DELETED ---
 
-    # 1. Attempt to handle redundant JSON wrapper (e.g., '{"room_type": "..."}')
-    if cleaned_str.startswith(('{', '[')) and cleaned_str.endswith(('}', ']')):
-        try:
-            temp_data = json.loads(cleaned_str)
-            if isinstance(temp_data, dict):
-                value = list(temp_data.values())[0] if temp_data else cleaned_str
-            elif isinstance(temp_data, list) and temp_data:
-                value = temp_data[0]
-            else:
-                value = cleaned_str
-            cleaned_str = str(value)
-        except json.JSONDecodeError:
-            pass 
-            
-    # 2. Aggressive cleanup: remove any leading/trailing quotes, braces, and brackets
-    cleaned_str = re.sub(r'^[\'\"\[\]\{\}\s]+|[\'\"\[\]\{\}\s]+$', '', cleaned_str)
-    
-    return cleaned_str.strip() 
-
-# --- 4. AI FUNCTIONS (No functional change) ---
+# --- 4. AI FUNCTIONS ---
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -170,8 +148,11 @@ def extract_pdf_data(pdf_file):
         }}
         """
         raw = model.generate_content(prompt).text
+        # Use simple json.loads, cleanup will happen later in the UI logic
         return json.loads(raw.replace("```json", "").replace("```", "").strip())
-    except: return None
+    except Exception as e:
+        # print(f"Extraction error: {e}") 
+        return None
 
 def fetch_hotel_details_text(hotel, city, r_type):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -191,7 +172,6 @@ def fetch_image(query):
         if res.status_code == 200 and 'items' in res.json() and res.json()['items']:
             return res.json()["items"][0]["link"]
     except Exception as e: 
-        # st.warning(f"Image fetch failed: {e}") 
         return None
     return None
 
@@ -207,6 +187,7 @@ def get_img_reader(url):
 def draw_vector_seal(c, x, y, size):
     c.saveState()
     fg_blue = Color(0.0, 0.25, 0.5) 
+    fg_gold = Color(0.9, 0.75, 0.1) 
     
     c.setStrokeColor(fg_blue); c.setFillColor(fg_blue); c.setFillAlpha(0.8); c.setStrokeAlpha(0.8); c.setLineWidth(1.5)
     cx, cy = x + size/2, y + size/2
@@ -232,16 +213,14 @@ def generate_pdf(data, info, imgs, rooms_list):
     c = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
     
-    # Image Readers
     i_ext = get_img_reader(imgs[0]); i_lobby = get_img_reader(imgs[1]); i_room = get_img_reader(imgs[2])
 
-    # BRANDING COLORS
-    fg_blue = Color(0.0, 0.25, 0.5)
-    fg_gold = Color(0.9, 0.75, 0.1) 
-    text_color = Color(0.2, 0.2, 0.2)
-    label_color = Color(0.1, 0.1, 0.1)
+    fg_blue = Color(0.0, 0.25, 0.5); fg_gold = Color(0.9, 0.75, 0.1) 
+    text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
 
     for i, room in enumerate(rooms_list):
+        if i > 0: c.showPage() # Start a new page for each room
+        
         # Header / Logo
         try: c.drawImage("fg_logo.png", w/2-80, h-60, 160, 55, mask='auto', preserveAspectRatio=True)
         except: c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(w/2, h-50, "FLY GOLDFINCH")
@@ -301,15 +280,21 @@ def generate_pdf(data, info, imgs, rooms_list):
             y -= (ih + 30)
         else: y -= 15
 
-        # Policies
+        # Policies (Table drawing requires SimpleDocTemplate components for robust layout)
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y-=15
+        
+        elements = []
         pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability. Request upon arrival."], ["Required:", "Passport & Credit Card."]]
         t = Table(pt, colWidths=[130, 380])
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),fg_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
-        t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
+        
+        # Manually calculate space for the table
+        table_height = 5 * 10 # Estimated height
+        t.drawOn(c, left, y-table_height); y -= (table_height + 15)
 
-        # T&C
+        # T&C 
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
+        
         tnc = [
             "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
             f"2. Identification: The lead guest, {room['guest']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
@@ -322,21 +307,29 @@ def generate_pdf(data, info, imgs, rooms_list):
             "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
             "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
         ]
+        
         styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
-        t_data = [[Paragraph(x, styleN)] for x in tnc]
-        t2 = Table(t_data, colWidths=[510])
-        t2.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.5,Color(0.2,0.2,0.2)), ('PADDING',(0,0),(-1,-1),2), ('VALIGN',(0,0),(-1,-1),'TOP')]))
-        tw, th = t2.wrapOn(c, w, h); t2.drawOn(c, left, y-th); y-=(th+10) # Adjusted y calculation
+        
+        # Manually calculate and draw T&C
+        tnc_start_y = y
+        for line in tnc:
+            if y < 80: # If running out of space, move to next page
+                c.showPage(); y = h - 60; tnc_start_y = y
+            
+            p = Paragraph(line, styleN)
+            p_width, p_height = p.wrap(w - 80, 50)
+            p.drawOn(c, left, y - p_height)
+            y -= (p_height + 2)
+
 
         # Footer
+        c.setFillColor(fg_gold); c.setLineWidth(3); c.line(0, 45, w, 45) 
         draw_vector_seal(c, w-130, 45, 80)
-        c.setStrokeColor(fg_gold); c.setLineWidth(3); c.line(0, 45, w, 45) # Gold Footer Line
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Fly Goldfinch")
         c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: [CONTACT EMAIL HERE]") 
-        
-        c.showPage()
     
     c.save(); buffer.seek(0); return buffer
+
 
 # --- 6. UI LOGIC (Updated with Fix) ---
 
@@ -350,31 +343,40 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
             with st.spinner("Processing New File..."):
                 reset_booking_state()
                 data = extract_pdf_data(up_file)
+                
+                # --- START: BUG FIX LOGIC ---
                 if data:
                     st.session_state.hotel_name = data.get('hotel_name', '')
                     st.session_state.city = data.get('city', '')
                     
-                    # DATE PARSING FIX (Using smart date parser on raw AI output)
-                    d_in = parse_smart_date(data.get('checkin_raw'))
-                    d_out = parse_smart_date(data.get('checkout_raw'))
-                    
-                    # CRITICAL FIX 1: DATE SWAPPING LOGIC
-                    if d_in and d_out and d_in > d_out:
-                        d_in, d_out = d_out, d_in
-                        
-                    if d_in: st.session_state.checkin = d_in
-                    if d_out: st.session_state.checkout = d_out
-                    
+                    # Date/Meal/Policy Logic (Omitted for brevity, remains same)
+                    d_in = parse_smart_date(data.get('checkin_raw')); d_out = parse_smart_date(data.get('checkout_raw'))
+                    if d_in and d_out and d_in > d_out: d_in, d_out = d_out, d_in
+                    if d_in: st.session_state.checkin = d_in; st.session_state.checkout = d_out
                     st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
-                    
-                    # Rooms
+
+                    # Rooms and Cleaning Logic (The Fix)
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
                         
-                        # --- FIX: Clean Room Type String APPLIED HERE ---
                         raw_room_type = rooms[0].get('room_type', '')
-                        st.session_state.room_type = clean_room_type_string(raw_room_type)
+                        
+                        # Step A: Check if it's a known JSON wrapper and extract inner value
+                        try:
+                            if raw_room_type.strip().startswith(('{', '[')):
+                                extracted_val = json.loads(raw_room_type)
+                                if isinstance(extracted_val, dict):
+                                    raw_room_type = list(extracted_val.values())[0]
+                                elif isinstance(extracted_val, list):
+                                    raw_room_type = extracted_val[0]
+                        except json.JSONDecodeError:
+                            pass 
+                            
+                        # Step B: Aggressively strip all surrounding quotes/braces/brackets
+                        clean_name = str(raw_room_type).strip().strip('\'"{}[]')
+
+                        st.session_state.room_type = clean_name # Set the definitive clean state
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
@@ -385,12 +387,13 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                             if st.session_state.room_type and st.session_state.room_type not in st.session_state.room_options:
                                 st.session_state.room_options.insert(0, st.session_state.room_type)
                         
-                        # CANCELLATION LOGIC (Omitted for brevity, remains the same)
+                        # Cancellation Logic (Omitted for brevity)
                         # ...
                         
                         st.session_state.last_uploaded_file = up_file.name
                         st.success("New Booking Loaded!")
                         st.rerun()
+                # --- END: BUG FIX LOGIC ---
 
 # === MANUAL SEARCH ===
 st.markdown("### 🏨 Hotel Details")
@@ -441,7 +444,7 @@ with c2:
     st.date_input("Check-In", key="checkin")
     st.date_input("Check-Out", key="checkout", min_value=min_out)
     
-    # ROOM TYPE LOGIC (FIX APPLIED HERE)
+    # ROOM TYPE LOGIC
     opts = st.session_state.room_options.copy()
     current_room_name = st.session_state.room_type
     
@@ -455,7 +458,6 @@ with c2:
             st.session_state.room_type = st.session_state.room_sel
             
     idx = 0
-    # Logic to set the index to the extracted room name
     if current_room_name in opts: idx = opts.index(current_room_name)
     
     # Final fix: Ensure the selectbox reflects the extracted or current room name
@@ -465,21 +467,20 @@ with c2:
     st.selectbox("Room Type", opts, index=idx, key="room_sel", on_change=on_room_change)
     
     # Conditional Input Logic (FIX APPLIED HERE)
-    manual_input_key = "room_type_manual_input" # Key for manual text input
+    manual_input_key = "room_type_manual_input" 
 
     if st.session_state.get("room_sel") == "Manual...": 
         # When manual is selected, the final room type is taken from this text input
         manual_val = st.text_input("Type Name", value=current_room_name, key=manual_input_key)
         st.session_state.room_type = manual_val
     else:
-        # Standard selection logic (already handled by on_room_change)
-        st.session_state.room_type = st.session_state.room_sel # Keep the selection box value
+        st.session_state.room_type = st.session_state.room_sel 
 
     st.number_input("Adults", 1, key="adults")
     st.text_input("Size (Optional)", key="room_size")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
-    # Policy logic (remains the same)
+    # Policy logic
     policy_txt = "Non-Refundable & Non-Amendable"
     if ptype == "Refundable":
         manual_txt = st.text_input("Policy Description (Optional)", value=st.session_state.policy_text_manual, key="policy_text_manual")
