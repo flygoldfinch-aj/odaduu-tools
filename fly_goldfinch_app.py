@@ -24,50 +24,25 @@ try:
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
-    st.stop()
+    # st.stop() 
 
-# --- 2. SESSION STATE INITIALIZATION ---
-def init_state():
-    keys = {
-        'ai_room_str': "",
-        'hotel_name': "",
-        'city': "",
-        'checkin': datetime.now().date(),
-        'checkout': datetime.now().date() + timedelta(days=1),
-        'cancel_days': 3,
-        'search_query': "",
-        'suggestions': [],
-        'last_uploaded_file': None, # CRITICAL: Tracks file identity
-        'num_rooms': 1,
-        'room_type': "",
-        'policy_type': "Non-Refundable",
-        'policy_text_manual': "",
-        'meal_plan': "Breakfast Only",
-        'room_size': "",
-        'adults': 2
-    }
-    
-    # Init main keys
-    for k, v in keys.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-            
-    # Init dynamic room keys
-    for i in range(10):
-        if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ""
-        if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ""
-
-init_state()
-
-def reset_booking_state():
-    """Hard reset of all data fields."""
+# --- 2. SESSION STATE ---
+if 'ai_room_str' not in st.session_state:
+    st.session_state.ai_room_str = "" 
+if 'hotel_name' not in st.session_state:
     st.session_state.hotel_name = ""
+if 'city' not in st.session_state:
     st.session_state.city = ""
-    st.session_state.ai_room_str = ""
-    st.session_state.num_rooms = 1
-    for i in range(10):
-        st.session_state[f'room_{i}_guest'] = ""
-        st.session_state[f'room_{i}_conf'] = ""
+if 'checkin' not in st.session_state:
+    st.session_state.checkin = datetime.now().date()
+if 'checkout' not in st.session_state:
+    st.session_state.checkout = datetime.now().date() + timedelta(days=1)
+if 'cancel_days' not in st.session_state:
+    st.session_state.cancel_days = 3
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
+if 'suggestions' not in st.session_state:
+    st.session_state.suggestions = []
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -146,7 +121,7 @@ def fetch_hotel_details_text(hotel, city):
 def fetch_image(query):
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
-                           params={"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
+                           params={"q": query, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
         return res.json()["items"][0]["link"]
     except: return None
 
@@ -169,17 +144,7 @@ def draw_vector_seal(c, x, y, size):
     c.setLineWidth(0.5); c.circle(cx, cy, r_inner, stroke=1, fill=0)
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "FLY")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "GOLDFINCH")
-    
-    # Text ring
-    c.setFont("Helvetica-Bold", 6)
-    c.saveState(); c.translate(cx, cy)
-    for i, char in enumerate("CERTIFIED VOUCHER"):
-        angle = 140 - (i * 12); rad = radians(angle)
-        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle-90); c.drawCentredString(0,0,char); c.restoreState()
-    for i, char in enumerate("OFFICIAL"):
-        angle = 235 + (i * 12); rad = radians(angle)
-        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle+90); c.drawCentredString(0,0,char); c.restoreState()
-    c.restoreState(); c.restoreState()
+    c.restoreState()
 
 def generate_pdf(data, info, imgs, rooms_list):
     buffer = io.BytesIO()
@@ -299,63 +264,49 @@ def generate_pdf(data, info, imgs, rooms_list):
 
 st.title("✈️ Fly Goldfinch Voucher Generator")
 
-# Reset Button
-if st.button("🔄 Reset App / Clear Data"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.rerun()
-
 # === UPLOAD ===
 with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     up_file = st.file_uploader("Drop PDF here", type="pdf")
-    
-    # CRITICAL FIX: Only process if file is different from last time
     if up_file:
-        if st.session_state.get('last_uploaded_file') != up_file.name:
-            with st.spinner("Processing..."):
-                # Clean slate before new extraction
-                reset_booking_state()
+        with st.spinner("Processing..."):
+            data = extract_pdf_data(up_file)
+            if data:
+                st.session_state.hotel_name = data.get('hotel_name', '')
+                st.session_state.city = data.get('city', '')
                 
-                data = extract_pdf_data(up_file)
-                if data:
-                    st.session_state.hotel_name = data.get('hotel_name', '')
-                    st.session_state.city = data.get('city', '')
+                # Dates
+                d_in = parse_smart_date(data.get('checkin_raw'))
+                d_out = parse_smart_date(data.get('checkout_raw'))
+                if d_in and d_out and d_in > d_out: d_in, d_out = d_out, d_in
+                if d_in: st.session_state.checkin = d_in
+                if d_out: st.session_state.checkout = d_out
+                
+                st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
+                
+                # Rooms - CLEAN STRING LOGIC
+                rooms = data.get('rooms', [])
+                if rooms:
+                    st.session_state.num_rooms = len(rooms)
+                    raw_type = rooms[0].get('room_type', '')
+                    st.session_state.ai_room_str = clean_extracted_text(raw_type)
                     
-                    # Dates
-                    d_in = parse_smart_date(data.get('checkin_raw'))
-                    d_out = parse_smart_date(data.get('checkout_raw'))
-                    if d_in and d_out and d_in > d_out: d_in, d_out = d_out, d_in
-                    if d_in: st.session_state.checkin = d_in
-                    if d_out: st.session_state.checkout = d_out
-                    
-                    st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
-                    
-                    # Rooms - CLEAN STRING LOGIC
-                    rooms = data.get('rooms', [])
-                    if rooms:
-                        st.session_state.num_rooms = len(rooms)
-                        raw_type = rooms[0].get('room_type', '')
-                        st.session_state.ai_room_str = clean_extracted_text(raw_type)
-                        
-                        for i, r in enumerate(rooms):
-                            st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
-                            st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
-                    
-                    # Refundable Logic
-                    is_ref = data.get('is_refundable', False)
-                    dead_raw = data.get('cancel_deadline_raw')
-                    if is_ref:
-                        st.session_state.policy_type = 'Refundable'
-                        if dead_raw:
-                            d_date = parse_smart_date(dead_raw)
-                            if d_date:
-                                st.session_state.cancel_days = max(1, (st.session_state.checkin - d_date).days)
-                    else:
-                        st.session_state.policy_type = 'Non-Refundable'
+                    for i, r in enumerate(rooms):
+                        st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
+                        st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
+                
+                # Refundable Logic
+                is_ref = data.get('is_refundable', False)
+                dead_raw = data.get('cancel_deadline_raw')
+                if is_ref:
+                    st.session_state.policy_type = 'Refundable'
+                    if dead_raw:
+                        d_date = parse_smart_date(dead_raw)
+                        if d_date:
+                            st.session_state.cancel_days = max(1, (st.session_state.checkin - d_date).days)
+                else:
+                    st.session_state.policy_type = 'Non-Refundable'
 
-                    st.session_state.last_uploaded_file = up_file.name # Mark file as processed
-                    st.success("Loaded! Edit details below.")
-                    st.rerun()
+                st.success("Loaded!")
 
 # === MANUAL SEARCH ===
 st.markdown("### 🏨 Hotel Details")
@@ -395,8 +346,12 @@ with c1:
                 st.caption(f"*(Same as Room 1)*")
 
 with c2:
+    # --- DATE VALIDATION LOGIC RESTORED ---
+    if st.session_state.checkout <= st.session_state.checkin:
+        st.session_state.checkout = st.session_state.checkin + timedelta(days=1)
+        
     st.date_input("Check-In", key="checkin")
-    st.date_input("Check-Out", key="checkout")
+    st.date_input("Check-Out", key="checkout", min_value=st.session_state.checkin + timedelta(days=1))
     
     # --- SIMPLIFIED ROOM TYPE ---
     final_room_type = st.text_input("Room Type Name", value=st.session_state.ai_room_str, help="Auto-filled from PDF. Edit if incorrect.")
