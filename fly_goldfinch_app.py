@@ -27,13 +27,15 @@ except Exception:
 
 # --- 2. SESSION STATE ---
 if 'ai_room_str' not in st.session_state:
-    st.session_state.ai_room_str = "Standard Room" 
+    st.session_state.ai_room_str = "" # Start empty
 if 'hotel_name' not in st.session_state:
     st.session_state.hotel_name = ""
 if 'checkin' not in st.session_state:
     st.session_state.checkin = datetime.now().date()
 if 'checkout' not in st.session_state:
     st.session_state.checkout = datetime.now().date() + timedelta(days=1)
+if 'cancel_days' not in st.session_state:
+    st.session_state.cancel_days = 3
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -48,23 +50,16 @@ def parse_smart_date(date_str):
         except ValueError: continue
     return None
 
-def force_clean_room_string(raw_val):
-    """
-    BRUTE FORCE CLEANER: If it looks like garbage, return a safe default.
-    """
+def clean_extracted_text(raw_val):
+    """Basic cleanup to remove obvious JSON artifacts."""
     s = str(raw_val).strip()
-    
-    # 1. Kill known bad AI placeholders
-    bad_words = ["room_name", "room_type", "room type", "room name"]
-    if s.lower() in bad_words:
-        return "Standard Room"
-        
-    # 2. Kill JSON artifacts
+    # Kill JSON artifacts
     if s.startswith("{") or s.startswith("[") or '"' in s or "'" in s:
         s = s.replace('"', '').replace("'", "").replace("{", "").replace("}", "")
-        
-    if len(s) < 2 or len(s) > 50:
-        return "Standard Room"
+    
+    # If it looks like a variable name, clear it
+    if s.lower() in ["room_name", "room_type", "room type"]:
+        return ""
         
     return s
 
@@ -81,13 +76,6 @@ def detect_city(hotel_name):
     model = genai.GenerativeModel('gemini-2.0-flash')
     try: return model.generate_content(f'What city is "{hotel_name}" in? Return ONLY city name string.').text.strip()
     except: return ""
-
-def get_room_types(hotel_name):
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    try:
-        res = model.generate_content(f'List 10 room names for "{hotel_name}". Return JSON list strings.').text
-        return json.loads(res.replace("```json", "").replace("```", "").strip())
-    except: return []
 
 def extract_pdf_data(pdf_file):
     try:
@@ -204,6 +192,13 @@ def generate_pdf(data, info, imgs, rooms_list):
         c.setFillColor(text_color); c.drawString(left+100, y, data['room_type']) 
         y-=12; c.setFillColor(label_color); c.drawString(left, y, "Meal Plan:")
         c.setFillColor(text_color); c.drawString(left+100, y, data['meal'])
+        
+        if data['room_size']:
+            y-=12; c.setFillColor(label_color); c.drawString(left, y, "Size:")
+            c.setFillColor(text_color); c.drawString(left+100, y, data['room_size'])
+            
+        y-=12; c.setFillColor(label_color); c.drawString(left, y, "Policy:")
+        c.setFillColor(text_color); c.drawString(left+100, y, data['policy'])
         y-=20
 
         # Images
@@ -217,7 +212,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         
     c.save(); buffer.seek(0); return buffer
 
-# --- 6. UI LOGIC (LINEAR & ROBUST) ---
+# --- 6. UI LOGIC ---
 
 st.title("✈️ Fly Goldfinch Voucher Generator")
 
@@ -240,16 +235,28 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                 
                 st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
                 
-                # Rooms
+                # Rooms - CLEAN STRING LOGIC
                 rooms = data.get('rooms', [])
                 if rooms:
                     st.session_state.num_rooms = len(rooms)
                     raw_type = rooms[0].get('room_type', '')
-                    st.session_state.ai_room_str = force_clean_room_string(raw_type)
+                    st.session_state.ai_room_str = clean_extracted_text(raw_type)
                     
                     for i, r in enumerate(rooms):
                         st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                         st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
+                
+                # Refundable Logic
+                is_ref = data.get('is_refundable', False)
+                dead_raw = data.get('cancel_deadline_raw')
+                if is_ref:
+                    st.session_state.policy_type = 'Refundable'
+                    if dead_raw:
+                        d_date = parse_smart_date(dead_raw)
+                        if d_date:
+                            st.session_state.cancel_days = max(1, (st.session_state.checkin - d_date).days)
+                else:
+                    st.session_state.policy_type = 'Non-Refundable'
 
                 st.success("Loaded!")
 
@@ -261,76 +268,50 @@ with c1:
     
     st.subheader("Rooms")
     n_rooms = st.number_input("Count", 1, 10, key="num_rooms")
-    
-    # === NEW: Logic for Same Confirmation No ===
     same_conf = st.checkbox("Same Confirmation No for all rooms?", key="same_conf_check")
     
     for i in range(n_rooms):
         col_g, col_c = st.columns([2, 1])
-        
-        # Column 1: Guest Name (Always visible)
-        with col_g: 
-            st.text_input(f"Room {i+1} Guest Name", key=f"room_{i}_guest")
-        
-        # Column 2: Confirmation No (Conditional)
+        with col_g: st.text_input(f"Room {i+1} Guest Name", key=f"room_{i}_guest")
         with col_c: 
-            if i == 0:
-                # Room 1 always shows input
-                st.text_input("Conf No", key=f"room_{i}_conf")
+            if i == 0 or not same_conf:
+                st.text_input(f"Conf No (Room {i+1})", key=f"room_{i}_conf")
             else:
-                # Room 2+ only shows if 'Same Conf' is unchecked
-                if not same_conf:
-                    st.text_input("Conf No", key=f"room_{i}_conf")
-                else:
-                    st.caption("*(Linked to Room 1)*")
+                st.caption(f"*(Same as Room 1)*")
 
 with c2:
     st.date_input("Check-In", key="checkin")
     st.date_input("Check-Out", key="checkout")
     
-    # --- ROOM TYPE LOGIC (Hardcoded & Linear) ---
-    opts = []
-    if st.session_state.hotel_name:
-        opts = get_room_types(st.session_state.hotel_name)
-    
-    extracted = st.session_state.ai_room_str
-    if extracted and extracted not in opts:
-        opts.insert(0, extracted)
-    
-    opts.append("Manual...") 
-    
-    sel_val = st.selectbox("Room Type", opts, key="room_type_selector")
-    
-    final_room_type_value = ""
-    
-    if sel_val == "Manual...":
-        manual_val = st.text_input("Enter Room Name manually", value=extracted)
-        final_room_type_value = manual_val
-    else:
-        final_room_type_value = sel_val
+    # --- SIMPLIFIED ROOM TYPE ---
+    # No dropdown/manual switch. Just a text input pre-filled with the AI result.
+    # User can edit it freely.
+    final_room_type = st.text_input("Room Type Name", value=st.session_state.ai_room_str, help="Auto-filled from PDF. Edit if incorrect.")
 
-    st.caption(f"Final Room Type on PDF: **{final_room_type_value}**")
-
-    # Adults/Meal/Etc
     st.number_input("Adults", 1, key="adults")
     st.text_input("Size (Optional)", key="room_size")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
-    st.text_input("Policy Description", "Non-Refundable", key="policy_text")
+    
+    # --- RESTORED POLICY LOGIC ---
+    st.subheader("Cancellation Policy")
+    ptype = st.radio("Type", ["Non-Refundable", "Refundable"], index=0 if st.session_state.get('policy_type') == 'Non-Refundable' else 1, horizontal=True)
+    
+    final_policy_text = "Non-Refundable & Non-Amendable"
+    if ptype == "Refundable":
+        days = st.number_input("Free Cancel Days Before Check-in", 0, value=st.session_state.get('cancel_days', 3))
+        cancel_date = st.session_state.checkin - timedelta(days=days)
+        final_policy_text = f"Free Cancellation until {cancel_date.strftime('%d %b %Y')}"
+        st.info(f"Policy: {final_policy_text}")
+    else:
+        st.info(f"Policy: {final_policy_text}")
 
 if st.button("Generate Voucher", type="primary"):
     with st.spinner("Generating..."):
         rooms_final = []
-        
-        # Get the primary confirmation number (Room 1)
         primary_conf = st.session_state.get('room_0_conf', '')
         
         for i in range(st.session_state.num_rooms):
-            # Determine the conf number for this specific room
-            if same_conf:
-                this_conf = primary_conf # Use the master one
-            else:
-                this_conf = st.session_state.get(f'room_{i}_conf', '') # Use specific one
-                
+            this_conf = primary_conf if same_conf else st.session_state.get(f'room_{i}_conf', '')
             rooms_final.append({
                 "guest": st.session_state.get(f'room_{i}_guest', ''),
                 "conf": this_conf
@@ -341,9 +322,9 @@ if st.button("Generate Voucher", type="primary"):
         
         pdf_data = {
             "hotel": st.session_state.hotel_name, "in": st.session_state.checkin, "out": st.session_state.checkout,
-            "room_type": final_room_type_value, 
+            "room_type": final_room_type, 
             "adults": st.session_state.adults, "meal": st.session_state.meal_plan,
-            "policy": st.session_state.policy_text, "room_size": st.session_state.room_size
+            "policy": final_policy_text, "room_size": st.session_state.room_size
         }
         
         pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_final)
