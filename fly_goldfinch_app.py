@@ -12,6 +12,7 @@ import json
 import pypdf
 from reportlab.lib.utils import ImageReader
 import re
+from math import sin, cos, radians
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Fly Goldfinch Voucher Generator", page_icon="✈️", layout="wide")
@@ -23,14 +24,14 @@ try:
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
-    st.stop()
+    # st.stop() 
 
 # --- 2. SESSION STATE ---
 if 'ai_room_str' not in st.session_state:
     st.session_state.ai_room_str = "" 
 if 'hotel_name' not in st.session_state:
     st.session_state.hotel_name = ""
-if 'city' not in st.session_state: # Ensure city is initialized
+if 'city' not in st.session_state:
     st.session_state.city = ""
 if 'checkin' not in st.session_state:
     st.session_state.checkin = datetime.now().date()
@@ -57,16 +58,11 @@ def parse_smart_date(date_str):
     return None
 
 def clean_extracted_text(raw_val):
-    """Basic cleanup to remove obvious JSON artifacts."""
     s = str(raw_val).strip()
-    # Kill JSON artifacts
     if s.startswith("{") or s.startswith("[") or '"' in s or "'" in s:
         s = s.replace('"', '').replace("'", "").replace("{", "").replace("}", "")
-    
-    # If it looks like a variable name, clear it
     if s.lower() in ["room_name", "room_type", "room type"]:
         return ""
-        
     return s
 
 # --- 4. AI FUNCTIONS ---
@@ -91,12 +87,9 @@ def extract_pdf_data(pdf_file):
         model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = f"""
         Extract booking details.
-        
-        CRITICAL: Return DATES exactly as they appear (e.g. "28 Sept 2025"). 
-        CRITICAL: For 'room_type', extract the ACTUAL name (e.g. "Deluxe King"). Do NOT return "room_name".
-        
+        CRITICAL: Return DATES exactly as they appear. 
+        CRITICAL: For 'room_type', extract the ACTUAL name.
         Text Snippet: {text[:25000]}
-        
         Return JSON:
         {{
             "hotel_name": "Name", "city": "City", 
@@ -128,7 +121,7 @@ def fetch_hotel_details_text(hotel, city):
 def fetch_image(query):
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
-                           params={"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
+                           params={"q": query, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
         return res.json()["items"][0]["link"]
     except: return None
 
@@ -139,7 +132,7 @@ def get_img_reader(url):
         if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
     except: return None
 
-# --- 5. PDF GENERATION ---
+# --- 5. PDF GENERATION (RESTORED 3 IMAGES & T&C BOX) ---
 
 def draw_vector_seal(c, x, y, size):
     c.saveState()
@@ -151,71 +144,130 @@ def draw_vector_seal(c, x, y, size):
     c.setLineWidth(0.5); c.circle(cx, cy, r_inner, stroke=1, fill=0)
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "FLY")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "GOLDFINCH")
-    c.restoreState()
+    
+    # Text ring
+    c.setFont("Helvetica-Bold", 6)
+    c.saveState(); c.translate(cx, cy)
+    for i, char in enumerate("CERTIFIED VOUCHER"):
+        angle = 140 - (i * 12); rad = radians(angle)
+        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle-90); c.drawCentredString(0,0,char); c.restoreState()
+    for i, char in enumerate("OFFICIAL"):
+        angle = 235 + (i * 12); rad = radians(angle)
+        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle+90); c.drawCentredString(0,0,char); c.restoreState()
+    c.restoreState(); c.restoreState()
 
 def generate_pdf(data, info, imgs, rooms_list):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
-    i_ext = get_img_reader(imgs[0]); i_lobby = get_img_reader(imgs[1]); i_room = get_img_reader(imgs[2])
     
+    # Load all 3 images
+    i_ext = get_img_reader(imgs[0])
+    i_lobby = get_img_reader(imgs[1])
+    i_room = get_img_reader(imgs[2])
+
     fg_blue = Color(0.0, 0.25, 0.5); fg_gold = Color(0.9, 0.75, 0.1) 
     text_color = Color(0.2, 0.2, 0.2); label_color = Color(0.1, 0.1, 0.1)
 
     for i, room in enumerate(rooms_list):
         if i > 0: c.showPage()
         
-        # Logo placeholder
+        # Header / Logo
         try: c.drawImage("fg_logo.png", w/2-80, h-60, 160, 55, mask='auto', preserveAspectRatio=True)
         except: c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(w/2, h-50, "FLY GOLDFINCH")
 
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 16)
-        c.drawCentredString(w/2, h-90, "HOTEL CONFIRMATION VOUCHER")
+        title = "HOTEL CONFIRMATION VOUCHER" + (f" (Room {i+1}/{len(rooms_list)})" if len(rooms_list)>1 else "")
+        c.drawCentredString(w/2, h-90, title)
 
         y = h - 120; left = 40
         
-        # 1. Guest Info
-        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Guest Information")
-        y-=15; c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Guest Name:")
-        c.setFillColor(text_color); c.drawString(left+100, y, room['guest'])
-        y-=12; c.setFillColor(label_color); c.drawString(left, y, "Conf No:")
-        c.setFillColor(text_color); c.drawString(left+100, y, room['conf'])
-        y-=20
+        # Helper to draw sections
+        def draw_sect(title, items):
+            nonlocal y
+            c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, title)
+            y-=5; c.setStrokeColor(lightgrey); c.line(left, y, w-40, y); y-=12
+            for lbl, val, b in items:
+                c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, lbl)
+                c.setFillColor(text_color); c.setFont("Helvetica-Bold" if b else "Helvetica", 10)
+                c.drawString(left+120, y, str(val)); y-=12
+            y-=5
 
-        # 2. Hotel Info
-        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Hotel Details")
-        y-=15; c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Hotel:")
-        c.setFillColor(text_color); c.drawString(left+100, y, data['hotel'])
-        y-=12; c.setFillColor(label_color); c.drawString(left, y, "Check-in:")
-        c.setFillColor(text_color); c.drawString(left+100, y, data['in'].strftime("%d %b %Y"))
-        y-=12; c.setFillColor(label_color); c.drawString(left, y, "Check-out:")
-        c.setFillColor(text_color); c.drawString(left+100, y, data['out'].strftime("%d %b %Y"))
-        y-=20
+        # Guest Info
+        draw_sect("Guest Information", [("Guest Name:", room['guest'], True), ("Confirmation No.:", room['conf'], True), ("Booking Date:", datetime.now().strftime("%d %b %Y"), False)])
 
-        # 3. Room Info
-        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Room Information")
-        y-=15; c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Room Type:")
-        c.setFillColor(text_color); c.drawString(left+100, y, data['room_type']) 
-        y-=12; c.setFillColor(label_color); c.drawString(left, y, "Meal Plan:")
-        c.setFillColor(text_color); c.drawString(left+100, y, data['meal'])
+        # Hotel Info
+        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, "Hotel Details"); y-=5; c.line(left, y, w-40, y); y-=12
+        c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Hotel:")
+        c.setFillColor(text_color); c.setFont("Helvetica-Bold", 10); c.drawString(left+120, y, data['hotel']); y-=12
+        c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "Address:")
+        c.setFillColor(text_color); c.setFont("Helvetica", 10)
+        c.drawString(left+120, y, info.get('addr1','')); y-=10
+        if info.get('addr2'): c.drawString(left+120, y, info.get('addr2','')); y-=12
+        else: y-=2
         
-        if data['room_size']:
-            y-=12; c.setFillColor(label_color); c.drawString(left, y, "Size:")
-            c.setFillColor(text_color); c.drawString(left+100, y, data['room_size'])
-            
-        y-=12; c.setFillColor(label_color); c.drawString(left, y, "Policy:")
-        c.setFillColor(text_color); c.drawString(left+100, y, data['policy'])
-        y-=20
+        nights = (data['out'] - data['in']).days
+        for l, v in [("Phone:", info.get('phone','')), ("Check-In:", data['in'].strftime("%d %b %Y")), ("Check-Out:", data['out'].strftime("%d %b %Y")), ("Nights:", str(nights))]:
+            c.setFillColor(label_color); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, l)
+            c.setFillColor(text_color); c.setFont("Helvetica", 10); c.drawString(left+120, y, v); y-=12
+        y-=5
 
-        # Images
-        if i_ext: 
-            try: c.drawImage(i_ext, left, y-100, 160, 95)
-            except: pass
-        
+        # Room Info
+        r_items = [("Room Type:", data['room_type'], False), ("No. of Pax:", f"{data['adults']} Adults", False), ("Meal Plan:", data['meal'], False)]
+        if data['room_size']: r_items.append(("Room Size:", data['room_size'], False))
+        r_items.append(("Cancellation:", data['policy'], "Refundable" in data['policy']))
+        draw_sect("Room Information", r_items)
+
+        # 3 IMAGES SECTION (RESTORED)
+        if i_ext or i_lobby or i_room:
+            ix=left; ih=95; iw=160; gap=10
+            if i_ext: 
+                try: c.drawImage(i_ext, ix, y-ih, iw, ih); ix+=iw+gap
+                except: pass
+            if i_lobby: 
+                try: c.drawImage(i_lobby, ix, y-ih, iw, ih); ix+=iw+gap
+                except: pass
+            if i_room: 
+                try: c.drawImage(i_room, ix, y-ih, iw, ih)
+                except: pass
+            y -= (ih + 30)
+        else: y -= 15
+
+        # Policies
+        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY"); y-=15
+        pt = [["Policy", "Time / Detail"], ["Standard Check-in:", info.get('in', '3:00 PM')], ["Standard Check-out:", info.get('out', '12:00 PM')], ["Early/Late:", "Subject to availability. Request upon arrival."], ["Required:", "Passport & Credit Card."]]
+        t = Table(pt, colWidths=[130, 380])
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),fg_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
+        t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
+
+        # T&C (RESTORED TABLE BOX LAYOUT)
+        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
+        tnc = [
+            "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
+            f"2. Identification: The lead guest, {room['guest']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
+            "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
+            "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
+            f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
+            "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
+            "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
+            "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
+            "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
+            "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
+        ]
+        styles = getSampleStyleSheet(); styleN = styles["Normal"]; styleN.fontSize = 7; styleN.leading = 8
+        t_data = [[Paragraph(x, styleN)] for x in tnc]
+        t2 = Table(t_data, colWidths=[510])
+        t2.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.5,Color(0.2,0.2,0.2)), ('PADDING',(0,0),(-1,-1),2), ('VALIGN',(0,0),(-1,-1),'TOP')]))
+        tw, th = t2.wrapOn(c, w, h); t2.drawOn(c, left, y-th)
+
         # Footer
-        c.setStrokeColor(fg_gold); c.setLineWidth(3); c.line(0, 45, w, 45)
         draw_vector_seal(c, w-130, 45, 80)
+        c.setStrokeColor(fg_gold); c.setLineWidth(3); c.line(0, 45, w, 45) # Gold Footer Line
+        c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Fly Goldfinch")
+        c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: [CONTACT EMAIL HERE]")
         
+        c.showPage()
+    
     c.save(); buffer.seek(0); return buffer
 
 # --- 6. UI LOGIC ---
@@ -266,7 +318,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
 
                 st.success("Loaded!")
 
-# === MANUAL SEARCH (RESTORED) ===
+# === MANUAL SEARCH ===
 st.markdown("### 🏨 Hotel Details")
 col_s, col_res = st.columns([2,1])
 with col_s: 
@@ -314,7 +366,7 @@ with c2:
     st.text_input("Size (Optional)", key="room_size")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
-    # --- RESTORED POLICY LOGIC ---
+    # --- POLICY ---
     st.subheader("Cancellation Policy")
     ptype = st.radio("Type", ["Non-Refundable", "Refundable"], index=0 if st.session_state.get('policy_type') == 'Non-Refundable' else 1, horizontal=True)
     
@@ -340,7 +392,12 @@ if st.button("Generate Voucher", type="primary"):
             })
             
         info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
-        imgs = [fetch_image(f"{st.session_state.hotel_name} exterior"), None, None]
+        # --- 3 IMAGES FETCH LOGIC ---
+        imgs = [
+            fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel exterior"),
+            fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel lobby"),
+            fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel interior room")
+        ]
         
         pdf_data = {
             "hotel": st.session_state.hotel_name, "in": st.session_state.checkin, "out": st.session_state.checkout,
