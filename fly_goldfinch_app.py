@@ -67,6 +67,11 @@ def clean_extracted_text(raw_val):
         return ""
     return s
 
+def clean_name_format(name_str):
+    """Ensures names are Title Case (e.g. 'John Doe')."""
+    if not name_str: return ""
+    return str(name_str).strip().title()
+
 # --- 4. AI FUNCTIONS ---
 
 def get_hotel_suggestions(query):
@@ -122,8 +127,10 @@ def fetch_hotel_details_text(hotel, city):
 
 def fetch_image(query):
     try:
+        # Clean query to help Google find better matches
+        clean_q = re.sub(r'[^\w\s]', '', query) # Remove weird symbols
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
-                           params={"q": query, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
+                           params={"q": clean_q, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
         return res.json()["items"][0]["link"]
     except: return None
 
@@ -146,7 +153,17 @@ def draw_vector_seal(c, x, y, size):
     c.setLineWidth(0.5); c.circle(cx, cy, r_inner, stroke=1, fill=0)
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "FLY")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "GOLDFINCH")
-    c.restoreState()
+    
+    # Text ring
+    c.setFont("Helvetica-Bold", 6)
+    c.saveState(); c.translate(cx, cy)
+    for i, char in enumerate("CERTIFIED VOUCHER"):
+        angle = 140 - (i * 12); rad = radians(angle)
+        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle-90); c.drawCentredString(0,0,char); c.restoreState()
+    for i, char in enumerate("OFFICIAL"):
+        angle = 235 + (i * 12); rad = radians(angle)
+        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle+90); c.drawCentredString(0,0,char); c.restoreState()
+    c.restoreState(); c.restoreState()
 
 def generate_pdf(data, info, imgs, rooms_list):
     buffer = io.BytesIO()
@@ -289,8 +306,8 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                 
                 data = extract_pdf_data(up_file)
                 if data:
-                    st.session_state.hotel_name = data.get('hotel_name', '')
-                    st.session_state.city = data.get('city', '')
+                    st.session_state.hotel_name = clean_name_format(data.get('hotel_name', ''))
+                    st.session_state.city = clean_name_format(data.get('city', ''))
                     
                     d_in = parse_smart_date(data.get('checkin_raw'))
                     d_out = parse_smart_date(data.get('checkout_raw'))
@@ -300,6 +317,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     
                     st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
                     
+                    # Rooms - CLEAN STRING LOGIC
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
@@ -308,8 +326,10 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
-                            st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
+                            # FORCE TITLE CASE ON GUEST NAME
+                            st.session_state[f'room_{i}_guest'] = clean_name_format(r.get('guest_name', ''))
                     
+                    # Refundable Logic
                     is_ref = data.get('is_refundable', False)
                     dead_raw = data.get('cancel_deadline_raw')
                     if is_ref:
@@ -321,7 +341,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
 
-                    st.session_state.last_uploaded_file = up_file.name
+                    st.session_state.last_uploaded_file = up_file.name # Mark file as processed
                     st.success("Loaded! Edit details below.")
                     st.rerun()
 
@@ -402,7 +422,6 @@ if st.button("Generate Voucher", type="primary"):
             })
             
         info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
-        
         # --- 3 IMAGES FETCH LOGIC (RESTORED) ---
         imgs = [
             fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel exterior"),
