@@ -43,6 +43,8 @@ if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 if 'suggestions' not in st.session_state:
     st.session_state.suggestions = []
+if 'last_uploaded_file' not in st.session_state:
+    st.session_state.last_uploaded_file = None
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -132,7 +134,7 @@ def get_img_reader(url):
         if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
     except: return None
 
-# --- 5. PDF GENERATION ---
+# --- 5. PDF GENERATION (FULL 3 IMAGES & T&C) ---
 
 def draw_vector_seal(c, x, y, size):
     c.saveState()
@@ -172,7 +174,6 @@ def generate_pdf(data, info, imgs, rooms_list):
 
         y = h - 120; left = 40
         
-        # Helper to draw sections
         def draw_sect(title, items):
             nonlocal y
             c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 12); c.drawString(left, y, title)
@@ -208,7 +209,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         r_items.append(("Cancellation:", data['policy'], "Refundable" in data['policy']))
         draw_sect("Room Information", r_items)
 
-        # 3 IMAGES SECTION
+        # 3 IMAGES SECTION (RESTORED)
         if i_ext or i_lobby or i_room:
             ix=left; ih=95; iw=160; gap=10
             if i_ext: 
@@ -230,7 +231,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),fg_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
-        # T&C BOX
+        # T&C BOX (RESTORED)
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
         tnc = [
             "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
@@ -264,49 +265,65 @@ def generate_pdf(data, info, imgs, rooms_list):
 
 st.title("✈️ Fly Goldfinch Voucher Generator")
 
+# Reset Button
+if st.button("🔄 Reset App / Clear Data"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
 # === UPLOAD ===
 with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     up_file = st.file_uploader("Drop PDF here", type="pdf")
+    
     if up_file:
-        with st.spinner("Processing..."):
-            data = extract_pdf_data(up_file)
-            if data:
-                st.session_state.hotel_name = data.get('hotel_name', '')
-                st.session_state.city = data.get('city', '')
+        # Check if new file to avoid overwriting edits
+        if st.session_state.get('last_uploaded_file') != up_file.name:
+            with st.spinner("Processing..."):
+                # Clean slate logic manually
+                st.session_state.hotel_name = ""
+                st.session_state.city = ""
+                st.session_state.num_rooms = 1
+                for i in range(10):
+                    st.session_state[f'room_{i}_guest'] = ""
+                    st.session_state[f'room_{i}_conf'] = ""
                 
-                # Dates
-                d_in = parse_smart_date(data.get('checkin_raw'))
-                d_out = parse_smart_date(data.get('checkout_raw'))
-                if d_in and d_out and d_in > d_out: d_in, d_out = d_out, d_in
-                if d_in: st.session_state.checkin = d_in
-                if d_out: st.session_state.checkout = d_out
-                
-                st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
-                
-                # Rooms - CLEAN STRING LOGIC
-                rooms = data.get('rooms', [])
-                if rooms:
-                    st.session_state.num_rooms = len(rooms)
-                    raw_type = rooms[0].get('room_type', '')
-                    st.session_state.ai_room_str = clean_extracted_text(raw_type)
+                data = extract_pdf_data(up_file)
+                if data:
+                    st.session_state.hotel_name = data.get('hotel_name', '')
+                    st.session_state.city = data.get('city', '')
                     
-                    for i, r in enumerate(rooms):
-                        st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
-                        st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
-                
-                # Refundable Logic
-                is_ref = data.get('is_refundable', False)
-                dead_raw = data.get('cancel_deadline_raw')
-                if is_ref:
-                    st.session_state.policy_type = 'Refundable'
-                    if dead_raw:
-                        d_date = parse_smart_date(dead_raw)
-                        if d_date:
-                            st.session_state.cancel_days = max(1, (st.session_state.checkin - d_date).days)
-                else:
-                    st.session_state.policy_type = 'Non-Refundable'
+                    d_in = parse_smart_date(data.get('checkin_raw'))
+                    d_out = parse_smart_date(data.get('checkout_raw'))
+                    if d_in and d_out and d_in > d_out: d_in, d_out = d_out, d_in
+                    if d_in: st.session_state.checkin = d_in
+                    if d_out: st.session_state.checkout = d_out
+                    
+                    st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
+                    
+                    rooms = data.get('rooms', [])
+                    if rooms:
+                        st.session_state.num_rooms = len(rooms)
+                        raw_type = rooms[0].get('room_type', '')
+                        st.session_state.ai_room_str = clean_extracted_text(raw_type)
+                        
+                        for i, r in enumerate(rooms):
+                            st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
+                            st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
+                    
+                    is_ref = data.get('is_refundable', False)
+                    dead_raw = data.get('cancel_deadline_raw')
+                    if is_ref:
+                        st.session_state.policy_type = 'Refundable'
+                        if dead_raw:
+                            d_date = parse_smart_date(dead_raw)
+                            if d_date:
+                                st.session_state.cancel_days = max(1, (st.session_state.checkin - d_date).days)
+                    else:
+                        st.session_state.policy_type = 'Non-Refundable'
 
-                st.success("Loaded!")
+                    st.session_state.last_uploaded_file = up_file.name
+                    st.success("Loaded! Edit details below.")
+                    st.rerun()
 
 # === MANUAL SEARCH ===
 st.markdown("### 🏨 Hotel Details")
@@ -346,7 +363,6 @@ with c1:
                 st.caption(f"*(Same as Room 1)*")
 
 with c2:
-    # --- DATE VALIDATION LOGIC RESTORED ---
     if st.session_state.checkout <= st.session_state.checkin:
         st.session_state.checkout = st.session_state.checkin + timedelta(days=1)
         
@@ -386,7 +402,8 @@ if st.button("Generate Voucher", type="primary"):
             })
             
         info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
-        # --- 3 IMAGES FETCH LOGIC ---
+        
+        # --- 3 IMAGES FETCH LOGIC (RESTORED) ---
         imgs = [
             fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel exterior"),
             fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel lobby"),
