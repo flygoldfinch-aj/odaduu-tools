@@ -27,15 +27,21 @@ except Exception:
 
 # --- 2. SESSION STATE ---
 if 'ai_room_str' not in st.session_state:
-    st.session_state.ai_room_str = "" # Start empty
+    st.session_state.ai_room_str = "" 
 if 'hotel_name' not in st.session_state:
     st.session_state.hotel_name = ""
+if 'city' not in st.session_state: # Ensure city is initialized
+    st.session_state.city = ""
 if 'checkin' not in st.session_state:
     st.session_state.checkin = datetime.now().date()
 if 'checkout' not in st.session_state:
     st.session_state.checkout = datetime.now().date() + timedelta(days=1)
 if 'cancel_days' not in st.session_state:
     st.session_state.cancel_days = 3
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
+if 'suggestions' not in st.session_state:
+    st.session_state.suggestions = []
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -260,6 +266,24 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
 
                 st.success("Loaded!")
 
+# === MANUAL SEARCH (RESTORED) ===
+st.markdown("### 🏨 Hotel Details")
+col_s, col_res = st.columns([2,1])
+with col_s: 
+    search = st.text_input("Search Hotel Name", key="search_input")
+    if search and search != st.session_state.search_query:
+        st.session_state.search_query = search
+        st.session_state.suggestions = get_hotel_suggestions(search)
+
+with col_res:
+    if st.session_state.suggestions:
+        sel = st.radio("Select:", st.session_state.suggestions, index=None, key="hotel_radio")
+        if sel and sel != st.session_state.hotel_name:
+            st.session_state.hotel_name = sel
+            with st.spinner("Fetching details..."):
+                st.session_state.city = detect_city(sel)
+            st.rerun()
+
 # === FORM ===
 c1, c2 = st.columns(2)
 with c1:
@@ -284,8 +308,6 @@ with c2:
     st.date_input("Check-Out", key="checkout")
     
     # --- SIMPLIFIED ROOM TYPE ---
-    # No dropdown/manual switch. Just a text input pre-filled with the AI result.
-    # User can edit it freely.
     final_room_type = st.text_input("Room Type Name", value=st.session_state.ai_room_str, help="Auto-filled from PDF. Edit if incorrect.")
 
     st.number_input("Adults", 1, key="adults")
