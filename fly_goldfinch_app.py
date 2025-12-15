@@ -48,6 +48,9 @@ def init_state():
     for i in range(10):
         defaults[f'room_{i}_guest'] = ''
         defaults[f'room_{i}_conf'] = ''
+        # Ensure manual input key is initialized
+        if f'room_type_manual_input' not in st.session_state:
+            st.session_state[f'room_type_manual_input'] = '' 
 
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -74,6 +77,9 @@ def reset_booking_state():
     if 'search_input' in st.session_state:
         st.session_state.search_input = ""
     st.session_state.search_query = ""
+    # Ensure manual input key is available
+    if 'room_type_manual_input' in st.session_state:
+        st.session_state.room_type_manual_input = ""
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -94,24 +100,32 @@ def parse_smart_date(date_str):
 
 def clean_room_type_string(raw_type):
     """
-    CLEANUP FIX: Removes residual JSON/quote garbage from room type extraction.
-    Ensures a clean string is always returned.
+    FIXED: Robust cleanup against residual JSON/quote garbage (re-implementing the successful fix).
     """
     if not isinstance(raw_type, str): return str(raw_type)
     
-    # 1. Attempt to parse raw JSON string output by AI (e.g., '{"room_name": "..."}')
-    if raw_type.strip().startswith(('{', '[')) and raw_type.strip().endswith(('}', ']')):
+    cleaned_str = str(raw_type).strip()
+
+    # 1. Attempt to handle redundant JSON wrapper (e.g., '{"room_name": "..."}')
+    if cleaned_str.startswith(('{', '[')) and cleaned_str.endswith(('}', ']')):
         try:
-            temp_data = json.loads(raw_type)
+            temp_data = json.loads(cleaned_str)
             if isinstance(temp_data, dict):
-                raw_type = list(temp_data.values())[0]
+                # Try to extract the first value from the dictionary
+                value = list(temp_data.values())[0] if temp_data else cleaned_str
             elif isinstance(temp_data, list) and temp_data:
-                raw_type = temp_data[0]
+                # Try to extract the first element from the list
+                value = temp_data[0]
+            else:
+                value = cleaned_str
+            cleaned_str = str(value)
         except json.JSONDecodeError:
             pass
             
-    # 2. General cleanup (remove leading/trailing quotes, brackets, and spaces)
-    return str(raw_type).strip().strip('\'"{}[] ')
+    # 2. Aggressive cleanup: remove any leading/trailing quotes, braces, and brackets
+    cleaned_str = re.sub(r'^[\'\"\[\]\{\}\s]+|[\'\"\[\]\{\}\s]+$', '', cleaned_str)
+    
+    return cleaned_str.strip()
 
 # --- 4. AI FUNCTIONS ---
 
@@ -303,7 +317,7 @@ def generate_pdf(data, info, imgs, rooms_list):
             f"2. Identification: The lead guest, {room['guest']}, must be present at check-in and must present valid government-issued photo identification (e.g., Passport).",
             "3. No-Show Policy: In the event of a \"no-show\" (failure to check in without prior cancellation), the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.",
             "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry, extra services, parking) must be settled by the guest directly with the hotel upon check-out.",
-            f"5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
+            "5. Occupancy: The room is confirmed for {data['adults']} Adults. Any change in occupancy must be approved by the hotel and may result in additional charges.",
             "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct or failure to follow hotel policies.",
             "7. Liability: The hotel is not responsible for the loss or damage of personal belongings, including valuables, unless they are deposited in the hotel's safety deposit box (if available).",
             "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
@@ -468,12 +482,14 @@ with c2:
 
     st.selectbox("Room Type", opts, index=idx, key="room_sel", on_change=on_room_change)
     
-    # Conditional Input Logic
+    # Conditional Input Logic (FIXED LINE IS HERE)
     if st.session_state.get("room_sel") == "Manual...": 
-        # When manual is selected, the final room type is taken from this text input
-        # Note: We use a different key for the text input itself to handle the state change correctly
+        # The key for the text input is 'room_type_manual_input'.
+        # The return value of st.text_input must be used, or the session state value must be referenced correctly.
         st.text_input("Type Name", value=current_room_name, key="room_type_manual_input")
-        st.session_state.room_type = st.session_state.manual_room_input # Update the final variable
+        # CRITICAL FIX: The old line caused an AttributeError. It must reference the value 
+        # saved by the text input widget's key.
+        st.session_state.room_type = st.session_state.room_type_manual_input # <--- CORRECTED LINE
     else:
         # When standard is selected, the room_type is already set by on_room_change
         st.session_state.room_type = st.session_state.room_sel
