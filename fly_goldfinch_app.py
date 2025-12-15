@@ -12,7 +12,6 @@ import json
 import pypdf
 from reportlab.lib.utils import ImageReader
 import re
-from math import sin, cos, radians
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Fly Goldfinch Voucher Generator", page_icon="✈️", layout="wide")
@@ -27,6 +26,9 @@ except Exception:
     # st.stop() 
 
 # --- 2. SESSION STATE ---
+# We use specific keys to store the fetched list so it doesn't disappear
+if 'fetched_room_types' not in st.session_state:
+    st.session_state.fetched_room_types = [] 
 if 'ai_room_str' not in st.session_state:
     st.session_state.ai_room_str = "" 
 if 'hotel_name' not in st.session_state:
@@ -39,10 +41,6 @@ if 'checkout' not in st.session_state:
     st.session_state.checkout = datetime.now().date() + timedelta(days=1)
 if 'cancel_days' not in st.session_state:
     st.session_state.cancel_days = 3
-if 'search_query' not in st.session_state:
-    st.session_state.search_query = ""
-if 'suggestions' not in st.session_state:
-    st.session_state.suggestions = []
 if 'last_uploaded_file' not in st.session_state:
     st.session_state.last_uploaded_file = None
 
@@ -68,13 +66,64 @@ def clean_extracted_text(raw_val):
     return s
 
 def format_guest_name(name_str):
-    """Converts 'john doe' to 'John Doe'."""
     if not name_str: return ""
     return str(name_str).strip().title()
 
-# --- 4. AI FUNCTIONS ---
+# --- 4. GOOGLE SEARCH & AI FUNCTIONS ---
+
+def google_search(query):
+    """Hits Google Custom Search API to get real web results."""
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "q": query,
+            "cx": SEARCH_CX,
+            "key": SEARCH_KEY,
+            "num": 5  # Fetch top 5 results for context
+        }
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            return res.json().get("items", [])
+    except:
+        pass
+    return []
+
+def fetch_real_room_types(hotel_name, city):
+    """
+    1. Searches Google for '{hotel} {city} room types'
+    2. Feeds search snippets to Gemini.
+    3. Returns a JSON list of actual room names.
+    """
+    search_query = f"{hotel_name} {city} official site room types accommodation"
+    results = google_search(search_query)
+    
+    if not results:
+        return ["Standard Room", "Deluxe Room"] # Fallback
+        
+    # Prepare context for Gemini
+    snippets = "\n".join([f"- {item.get('title','')}: {item.get('snippet','')}" for item in results])
+    
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = f"""
+    Based on these Google Search results for "{hotel_name}" in "{city}":
+    
+    {snippets}
+    
+    Extract a list of the specific Room Types mentioned (e.g., "Deluxe King", "Junior Suite", "Standard Twin").
+    Return ONLY a JSON list of strings. Do not include explanations.
+    Example: ["Superior Room", "Deluxe City View", "Executive Suite"]
+    """
+    
+    try:
+        res = model.generate_content(prompt).text
+        # Clean markdown
+        clean_json = res.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_json)
+    except:
+        return ["Standard Room", "Deluxe Room"] # Fallback
 
 def get_hotel_suggestions(query):
+    # (Simple AI hallucination for quick autocomplete)
     model = genai.GenerativeModel('gemini-2.0-flash')
     try:
         res = model.generate_content(f'Return JSON list of 3 official hotel names for: "{query}". JSON ONLY: ["Name 1", "Name 2"]').text
@@ -126,9 +175,8 @@ def fetch_hotel_details_text(hotel, city):
     except: return {}
 
 def fetch_image(query):
-    """Robust image fetcher with fallback logic."""
+    # Helper for PDF generation images
     try:
-        # 1. Clean query
         clean_q = re.sub(r'[^\w\s]', '', query) 
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
                            params={"q": clean_q, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
@@ -149,12 +197,12 @@ def get_smart_images(hotel, city):
     # 2. Lobby / Reception
     img2 = fetch_image(f"{base} hotel lobby interior")
     if not img2: img2 = fetch_image(f"{base} hotel reception")
-    if not img2: img2 = fetch_image(f"{base} interior design") # Fallback
+    if not img2: img2 = fetch_image(f"{base} interior design") 
     
     # 3. Bedroom
     img3 = fetch_image(f"{base} hotel bedroom interior")
     if not img3: img3 = fetch_image(f"{base} hotel room bed")
-    if not img3: img3 = fetch_image(f"{base} suite interior") # Fallback
+    if not img3: img3 = fetch_image(f"{base} suite interior") 
     
     return [img1, img2, img3]
 
@@ -165,7 +213,7 @@ def get_img_reader(url):
         if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
     except: return None
 
-# --- 5. PDF GENERATION (FULL 3 IMAGES & T&C) ---
+# --- 5. PDF GENERATION ---
 
 def draw_vector_seal(c, x, y, size):
     c.saveState()
@@ -177,14 +225,20 @@ def draw_vector_seal(c, x, y, size):
     c.setLineWidth(0.5); c.circle(cx, cy, r_inner, stroke=1, fill=0)
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "FLY")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "GOLDFINCH")
-    c.restoreState()
+    c.saveState(); c.translate(cx, cy)
+    for i, char in enumerate("CERTIFIED VOUCHER"):
+        angle = 140 - (i * 12); rad = radians(angle)
+        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle-90); c.drawCentredString(0,0,char); c.restoreState()
+    for i, char in enumerate("OFFICIAL"):
+        angle = 235 + (i * 12); rad = radians(angle)
+        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle+90); c.drawCentredString(0,0,char); c.restoreState()
+    c.restoreState(); c.restoreState()
 
 def generate_pdf(data, info, imgs, rooms_list):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
     
-    # Load all 3 images
     i_ext = get_img_reader(imgs[0])
     i_lobby = get_img_reader(imgs[1])
     i_room = get_img_reader(imgs[2])
@@ -195,7 +249,6 @@ def generate_pdf(data, info, imgs, rooms_list):
     for i, room in enumerate(rooms_list):
         if i > 0: c.showPage()
         
-        # Header / Logo
         try: c.drawImage("fg_logo.png", w/2-80, h-60, 160, 55, mask='auto', preserveAspectRatio=True)
         except: c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 18); c.drawCentredString(w/2, h-50, "FLY GOLDFINCH")
 
@@ -240,10 +293,9 @@ def generate_pdf(data, info, imgs, rooms_list):
         r_items.append(("Cancellation:", data['policy'], "Refundable" in data['policy']))
         draw_sect("Room Information", r_items)
 
-        # 3 IMAGES SECTION (ROBUST)
+        # 3 IMAGES
         if i_ext or i_lobby or i_room:
             ix=left; ih=95; iw=160; gap=10
-            # Force layout even if one fails, but try to draw all 3
             if i_ext: 
                 try: c.drawImage(i_ext, ix, y-ih, iw, ih); ix+=iw+gap
                 except: pass
@@ -263,7 +315,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),fg_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
-        # T&C BOX
+        # T&C
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
         tnc = [
             "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
@@ -288,7 +340,6 @@ def generate_pdf(data, info, imgs, rooms_list):
         c.setStrokeColor(fg_gold); c.setLineWidth(3); c.line(0, 45, w, 45) # Gold Footer Line
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Fly Goldfinch")
         c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: [CONTACT EMAIL HERE]")
-        
         c.showPage()
     
     c.save(); buffer.seek(0); return buffer
@@ -308,10 +359,8 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     up_file = st.file_uploader("Drop PDF here", type="pdf")
     
     if up_file:
-        # Check if new file to avoid overwriting edits
         if st.session_state.get('last_uploaded_file') != up_file.name:
             with st.spinner("Processing..."):
-                # Clean slate logic manually
                 st.session_state.hotel_name = ""
                 st.session_state.city = ""
                 st.session_state.num_rooms = 1
@@ -332,7 +381,6 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     
                     st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
                     
-                    # Rooms - CLEAN STRING & NAME FORMATTING
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
@@ -341,7 +389,6 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
-                            # APPLY NAME FORMATTING HERE
                             st.session_state[f'room_{i}_guest'] = format_guest_name(r.get('guest_name', ''))
                     
                     is_ref = data.get('is_refundable', False)
@@ -355,7 +402,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     else:
                         st.session_state.policy_type = 'Non-Refundable'
 
-                    st.session_state.last_uploaded_file = up_file.name # Mark file as processed
+                    st.session_state.last_uploaded_file = up_file.name 
                     st.success("Loaded! Edit details below.")
                     st.rerun()
 
@@ -366,16 +413,21 @@ with col_s:
     search = st.text_input("Search Hotel Name", key="search_input")
     if search and search != st.session_state.search_query:
         st.session_state.search_query = search
-        st.session_state.suggestions = get_hotel_suggestions(search)
+        # Optional: Auto-suggest can be triggered here if needed
 
 with col_res:
-    if st.session_state.suggestions:
-        sel = st.radio("Select:", st.session_state.suggestions, index=None, key="hotel_radio")
-        if sel and sel != st.session_state.hotel_name:
-            st.session_state.hotel_name = sel
-            with st.spinner("Fetching details..."):
-                st.session_state.city = detect_city(sel)
-            st.rerun()
+    # Button to fetch REAL room types from Google Search
+    if st.button("🔎 Fetch Room Types"):
+        if st.session_state.search_input:
+            st.session_state.hotel_name = st.session_state.search_input
+            # Trigger smart search for city and rooms
+            with st.spinner("Searching Google for room types..."):
+                if not st.session_state.city:
+                    st.session_state.city = detect_city(st.session_state.hotel_name)
+                
+                real_rooms = fetch_real_room_types(st.session_state.hotel_name, st.session_state.city)
+                st.session_state.fetched_room_types = real_rooms
+                st.rerun()
 
 # === FORM ===
 c1, c2 = st.columns(2)
@@ -403,8 +455,33 @@ with c2:
     st.date_input("Check-In", key="checkin")
     st.date_input("Check-Out", key="checkout", min_value=st.session_state.checkin + timedelta(days=1))
     
-    # --- SIMPLIFIED ROOM TYPE ---
-    final_room_type = st.text_input("Room Type Name", value=st.session_state.ai_room_str, help="Auto-filled from PDF. Edit if incorrect.")
+    # --- HYBRID ROOM SELECTION ---
+    # Combine PDF extraction + Google Search results + Manual Option
+    
+    # 1. Build Option List
+    options = []
+    
+    # Priority A: PDF Extraction (if available)
+    if st.session_state.ai_room_str:
+        options.append(st.session_state.ai_room_str)
+        
+    # Priority B: Google Search Results (if fetched)
+    if st.session_state.fetched_room_types:
+        for rt in st.session_state.fetched_room_types:
+            if rt not in options: options.append(rt)
+            
+    # Priority C: Always "Manual Entry"
+    options.append("Manual Entry...")
+    
+    # 2. Render Selectbox
+    selected_option = st.selectbox("Select Room Type", options, key="room_type_dropdown")
+    
+    # 3. Handle Output
+    final_room_type = ""
+    if selected_option == "Manual Entry...":
+        final_room_type = st.text_input("Type Room Name Manually", key="manual_room_input")
+    else:
+        final_room_type = selected_option
 
     st.number_input("Adults", 1, key="adults")
     st.text_input("Size (Optional)", key="room_size")
@@ -436,7 +513,6 @@ if st.button("Generate Voucher", type="primary"):
             })
             
         info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
-        
         # --- 3 IMAGES FETCH LOGIC (SMART) ---
         imgs = get_smart_images(st.session_state.hotel_name, st.session_state.city)
         
