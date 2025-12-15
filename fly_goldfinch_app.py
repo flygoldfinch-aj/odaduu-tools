@@ -67,8 +67,8 @@ def clean_extracted_text(raw_val):
         return ""
     return s
 
-def clean_name_format(name_str):
-    """Ensures names are Title Case (e.g. 'John Doe')."""
+def format_guest_name(name_str):
+    """Converts 'john doe' to 'John Doe'."""
     if not name_str: return ""
     return str(name_str).strip().title()
 
@@ -126,13 +126,37 @@ def fetch_hotel_details_text(hotel, city):
     except: return {}
 
 def fetch_image(query):
+    """Robust image fetcher with fallback logic."""
     try:
-        # Clean query to help Google find better matches
-        clean_q = re.sub(r'[^\w\s]', '', query) # Remove weird symbols
+        # 1. Clean query
+        clean_q = re.sub(r'[^\w\s]', '', query) 
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
                            params={"q": clean_q, "cx": st.secrets["SEARCH_ENGINE_ID"], "key": st.secrets["SEARCH_API_KEY"], "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
-        return res.json()["items"][0]["link"]
-    except: return None
+        data = res.json()
+        if 'items' in data and len(data['items']) > 0:
+            return data['items'][0]['link']
+    except: pass
+    return None
+
+def get_smart_images(hotel, city):
+    """Tries multiple variations to guarantee 3 images."""
+    base = f"{hotel} {city}"
+    
+    # 1. Exterior
+    img1 = fetch_image(f"{base} hotel exterior building")
+    if not img1: img1 = fetch_image(f"{base} building")
+    
+    # 2. Lobby / Reception
+    img2 = fetch_image(f"{base} hotel lobby interior")
+    if not img2: img2 = fetch_image(f"{base} hotel reception")
+    if not img2: img2 = fetch_image(f"{base} interior design") # Fallback
+    
+    # 3. Bedroom
+    img3 = fetch_image(f"{base} hotel bedroom interior")
+    if not img3: img3 = fetch_image(f"{base} hotel room bed")
+    if not img3: img3 = fetch_image(f"{base} suite interior") # Fallback
+    
+    return [img1, img2, img3]
 
 def get_img_reader(url):
     if not url: return None
@@ -153,17 +177,7 @@ def draw_vector_seal(c, x, y, size):
     c.setLineWidth(0.5); c.circle(cx, cy, r_inner, stroke=1, fill=0)
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "FLY")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "GOLDFINCH")
-    
-    # Text ring
-    c.setFont("Helvetica-Bold", 6)
-    c.saveState(); c.translate(cx, cy)
-    for i, char in enumerate("CERTIFIED VOUCHER"):
-        angle = 140 - (i * 12); rad = radians(angle)
-        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle-90); c.drawCentredString(0,0,char); c.restoreState()
-    for i, char in enumerate("OFFICIAL"):
-        angle = 235 + (i * 12); rad = radians(angle)
-        c.saveState(); c.translate((size/2-9)*cos(rad), (size/2-9)*sin(rad)); c.rotate(angle+90); c.drawCentredString(0,0,char); c.restoreState()
-    c.restoreState(); c.restoreState()
+    c.restoreState()
 
 def generate_pdf(data, info, imgs, rooms_list):
     buffer = io.BytesIO()
@@ -226,9 +240,10 @@ def generate_pdf(data, info, imgs, rooms_list):
         r_items.append(("Cancellation:", data['policy'], "Refundable" in data['policy']))
         draw_sect("Room Information", r_items)
 
-        # 3 IMAGES SECTION (RESTORED)
+        # 3 IMAGES SECTION (ROBUST)
         if i_ext or i_lobby or i_room:
             ix=left; ih=95; iw=160; gap=10
+            # Force layout even if one fails, but try to draw all 3
             if i_ext: 
                 try: c.drawImage(i_ext, ix, y-ih, iw, ih); ix+=iw+gap
                 except: pass
@@ -248,7 +263,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),fg_blue), ('TEXTCOLOR',(0,0),(-1,0),Color(1,1,1)), ('FONTNAME',(0,0),(-1,-1),'Helvetica'), ('FONTSIZE',(0,0),(-1,-1),8), ('PADDING',(0,0),(-1,-1),3), ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2))]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-60); y-=(60+30)
 
-        # T&C BOX (RESTORED)
+        # T&C BOX
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y -= 10
         tnc = [
             "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
@@ -306,8 +321,8 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                 
                 data = extract_pdf_data(up_file)
                 if data:
-                    st.session_state.hotel_name = clean_name_format(data.get('hotel_name', ''))
-                    st.session_state.city = clean_name_format(data.get('city', ''))
+                    st.session_state.hotel_name = data.get('hotel_name', '')
+                    st.session_state.city = data.get('city', '')
                     
                     d_in = parse_smart_date(data.get('checkin_raw'))
                     d_out = parse_smart_date(data.get('checkout_raw'))
@@ -317,7 +332,7 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                     
                     st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
                     
-                    # Rooms - CLEAN STRING LOGIC
+                    # Rooms - CLEAN STRING & NAME FORMATTING
                     rooms = data.get('rooms', [])
                     if rooms:
                         st.session_state.num_rooms = len(rooms)
@@ -326,10 +341,9 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         
                         for i, r in enumerate(rooms):
                             st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
-                            # FORCE TITLE CASE ON GUEST NAME
-                            st.session_state[f'room_{i}_guest'] = clean_name_format(r.get('guest_name', ''))
+                            # APPLY NAME FORMATTING HERE
+                            st.session_state[f'room_{i}_guest'] = format_guest_name(r.get('guest_name', ''))
                     
-                    # Refundable Logic
                     is_ref = data.get('is_refundable', False)
                     dead_raw = data.get('cancel_deadline_raw')
                     if is_ref:
@@ -422,12 +436,9 @@ if st.button("Generate Voucher", type="primary"):
             })
             
         info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
-        # --- 3 IMAGES FETCH LOGIC (RESTORED) ---
-        imgs = [
-            fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel exterior"),
-            fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel lobby"),
-            fetch_image(f"{st.session_state.hotel_name} {st.session_state.city} hotel interior room")
-        ]
+        
+        # --- 3 IMAGES FETCH LOGIC (SMART) ---
+        imgs = get_smart_images(st.session_state.hotel_name, st.session_state.city)
         
         pdf_data = {
             "hotel": st.session_state.hotel_name, "in": st.session_state.checkin, "out": st.session_state.checkout,
