@@ -12,7 +12,6 @@ import json
 import pypdf
 from reportlab.lib.utils import ImageReader
 import re
-from math import sin, cos, radians
 
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(page_title="Fly Goldfinch Voucher Generator", page_icon="✈️", layout="wide")
@@ -24,30 +23,40 @@ try:
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
     st.error("⚠️ Secrets not found! Please check your Streamlit settings.")
-    st.stop()
+    # st.stop() 
 
 # --- 2. SESSION STATE ---
-if 'fetched_room_types' not in st.session_state:
-    st.session_state.fetched_room_types = [] 
-if 'ai_room_str' not in st.session_state:
-    st.session_state.ai_room_str = "" 
-if 'hotel_name' not in st.session_state:
-    st.session_state.hotel_name = ""
-if 'city' not in st.session_state:
-    st.session_state.city = ""
-if 'checkin' not in st.session_state:
-    st.session_state.checkin = datetime.now().date()
-if 'checkout' not in st.session_state:
-    st.session_state.checkout = datetime.now().date() + timedelta(days=1)
-if 'cancel_days' not in st.session_state:
-    st.session_state.cancel_days = 3
-if 'last_uploaded_file' not in st.session_state:
-    st.session_state.last_uploaded_file = None
-# --- FIX: Initialize these missing keys ---
-if 'search_query' not in st.session_state:
-    st.session_state.search_query = ""
-if 'suggestions' not in st.session_state:
-    st.session_state.suggestions = []
+def init_state():
+    # Define all keys that need to exist at startup
+    keys = {
+        'ai_room_str': "",
+        'fetched_room_types': [],
+        'hotel_name': "",
+        'city': "",
+        'checkin': datetime.now().date(),
+        'checkout': datetime.now().date() + timedelta(days=1),
+        'cancel_days': 3,
+        'search_query': "",  # <--- CRITICAL FIX: Ensure this exists
+        'suggestions': [],
+        'last_uploaded_file': None,
+        'num_rooms': 1,
+        'room_type': "",
+        'policy_type': "Non-Refundable",
+        'meal_plan': "Breakfast Only",
+        'room_size': "",
+        'adults': 2
+    }
+    
+    for k, v in keys.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+            
+    # Dynamic room keys
+    for i in range(10):
+        if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ""
+        if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ""
+
+init_state()
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -87,11 +96,16 @@ def google_search(query):
             "num": 5 
         }
         res = requests.get(url, params=params, timeout=5)
+        
         if res.status_code == 200:
             return res.json().get("items", [])
-    except:
-        pass
-    return []
+        else:
+            # DEBUG: Show error if API fails
+            st.error(f"Google Search API Error: {res.status_code} - {res.text}")
+            return []
+    except Exception as e:
+        st.error(f"Search Connection Error: {e}")
+        return []
 
 def fetch_real_room_types(hotel_name, city):
     """Searches Google for room types and uses Gemini to extract a clean list."""
@@ -180,9 +194,7 @@ def fetch_image(query):
     return None
 
 def get_smart_images(hotel, city):
-    """Tries multiple variations to guarantee 3 images."""
     base = f"{hotel} {city}"
-    
     img1 = fetch_image(f"{base} hotel exterior building")
     if not img1: img1 = fetch_image(f"{base} building")
     
@@ -215,8 +227,6 @@ def draw_vector_seal(c, x, y, size):
     c.setLineWidth(0.5); c.circle(cx, cy, r_inner, stroke=1, fill=0)
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "FLY")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "GOLDFINCH")
-    
-    c.setFont("Helvetica-Bold", 6)
     c.saveState(); c.translate(cx, cy)
     for i, char in enumerate("CERTIFIED VOUCHER"):
         angle = 140 - (i * 12); rad = radians(angle)
@@ -325,7 +335,6 @@ def generate_pdf(data, info, imgs, rooms_list):
         c.setStrokeColor(fg_gold); c.setLineWidth(3); c.line(0, 45, w, 45) 
         c.setFillColor(fg_blue); c.setFont("Helvetica-Bold", 9); c.drawString(left, 32, "Issued by: Fly Goldfinch")
         c.setFillColor(text_color); c.setFont("Helvetica", 9); c.drawString(left, 20, "Email: [CONTACT EMAIL HERE]")
-        
         c.showPage()
     
     c.save(); buffer.seek(0); return buffer
@@ -334,7 +343,6 @@ def generate_pdf(data, info, imgs, rooms_list):
 
 st.title("✈️ Fly Goldfinch Voucher Generator")
 
-# Reset Button
 if st.button("🔄 Reset App / Clear Data"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -402,7 +410,6 @@ with col_s:
         st.session_state.suggestions = get_hotel_suggestions(search)
 
 with col_res:
-    # Button to fetch REAL room types from Google Search
     if st.button("🔎 Fetch Room Types"):
         if st.session_state.search_input:
             st.session_state.hotel_name = st.session_state.search_input
@@ -442,11 +449,9 @@ with c2:
     
     # --- HYBRID ROOM SELECTION ---
     options = []
-    # 1. PDF Extraction (Priority)
     if st.session_state.ai_room_str:
         options.append(st.session_state.ai_room_str)
-    
-    # 2. Google Search Results
+        
     if st.session_state.fetched_room_types:
         for rt in st.session_state.fetched_room_types:
             if rt not in options: options.append(rt)
