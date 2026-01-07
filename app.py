@@ -21,13 +21,12 @@ from math import sin, cos, radians
 st.set_page_config(page_title="Odaduu Voucher Tool", page_icon="🌏", layout="wide")
 
 BRAND_BLUE = Color(0.05, 0.20, 0.40)
-BRAND_ORANGE = Color(0.95, 0.42, 0.13)
+BRAND_ORANGE = Color(0.97255, 0.29804, 0.0)
 COMPANY_NAME = "Odaduu Travel DMC"
 COMPANY_EMAIL = "aashwin@odaduu.jp"
-COMPANY_ADDRESS = "Odaduu Japan : 1 Chome-3-12 Takadanobaba, Shinjuku, Tokyo 169-0075"
 LOGO_FILE = "logo.png"
 
-FOOTER_LINE_Y = 45
+FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT
 
@@ -93,27 +92,6 @@ def clean_room_type_string(raw_type):
 # =====================================
 # 4) AI & SEARCH FUNCTIONS
 # =====================================
-
-def google_search(query, num=5):
-    try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
-        res = requests.get(url, params=params, timeout=5)
-        if res.status_code != 200:
-            st.error(f"Search API Error: {res.status_code}")
-            return []
-        return res.json().get("items", [])
-    except Exception:
-        return []
-
-def find_hotel_options(keyword):
-    if not keyword: return []
-    results = google_search(f"Hotel {keyword} official site")
-    hotels = []
-    for item in results:
-        title = item.get('title', '').split('|')[0].split('-')[0].strip()
-        if title and title not in hotels: hotels.append(title)
-    return hotels[:5]
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -183,6 +161,22 @@ def fetch_hotel_data_callback():
         fetch_image(f"{base_q} hotel room")
     ]
 
+def google_search(query, num=5):
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
+        res = requests.get(url, params=params, timeout=5)
+        return res.json().get("items", []) if res.status_code == 200 else []
+    except: return []
+
+def find_hotel_options(keyword):
+    results = google_search(f"Hotel {keyword} official site")
+    hotels = []
+    for item in results:
+        title = item.get('title', '').split('|')[0].split('-')[0].strip()
+        if title and title not in hotels: hotels.append(title)
+    return hotels[:5]
+
 def fetch_image(query):
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
@@ -241,10 +235,8 @@ def _draw_header(c, w, y_top):
 
 def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows):
     """
-    Draws ONE giant box with thick black lines containing two columns:
-    Left: Guest Info (incl Room Type, Pax, Meal, Cancellation)
-    Right: Hotel Details (incl Checkin/out, Conf No)
-    Text Size: Reduced to 7.5pt
+    Draws ONE giant box with thick black lines containing two columns.
+    Uses Paragraphs to ensure long names wrap instead of overlapping.
     """
     
     # Left Column Data
@@ -294,7 +286,6 @@ def _draw_image_row(c, x, y, w, imgs):
     if not valid: return y
 
     gap = 10; img_h = 90; img_w = (w - (2 * gap)) / 3
-    # Center the images if less than 3
     total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
     ix = x + (w - total_w) / 2
     
@@ -316,30 +307,33 @@ def _build_policy_table(w):
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), BRAND_BLUE), ("TEXTCOLOR", (0, 0), (-1, 0), white),
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("GRID", (0, 0), (-1, -1), 0.5, black), ("BOX", (0, 0), (-1, -1), 1.0, black), # Black Border
+        ("GRID", (0, 0), (-1, -1), 0.5, black), ("BOX", (0, 0), (-1, -1), 1.0, black),
         ("PADDING", (0, 0), (-1, -1), 4)
     ]))
     return t
 
 def _build_tnc_table(w, lead_guest):
     styles = getSampleStyleSheet()
-    s = ParagraphStyle("tnc", parent=styles["Normal"], fontSize=7, leading=8.5, textColor=black)
+    # Use Times-Roman as requested for T&C
+    s = ParagraphStyle("tnc", parent=styles["Normal"], fontName="Times-Roman", fontSize=8, leading=9.5, textColor=black)
+    
+    # Bullet points instead of numbers
     lines = [
-        "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
-        f"2. Identification: The lead guest, {lead_guest}, must be present at check-in and must present valid government-issued photo identification.",
-        '3. No-Show Policy: In the event of a "no-show", the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.',
-        "4. Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry) must be settled by the guest directly.",
-        "5. Occupancy: The room is confirmed for the number of guests mentioned above. Any change in occupancy must be approved by the hotel.",
-        "6. Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct.",
-        "7. Liability: The hotel is not responsible for the loss or damage of personal belongings unless deposited in the hotel's safety deposit box.",
-        "8. Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
-        "9. City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
-        "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
+        "• Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
+        f"• Identification: The lead guest, {lead_guest}, must be present at check-in and must present valid government-issued photo identification.",
+        '• No-Show Policy: In the event of a "no-show", the hotel reserves the right to charge a fee, typically equivalent to the full cost of the stay.',
+        "• Payment/Incidental Charges: The reservation includes the room and breakfast as specified. Any other charges (e.g., mini-bar, laundry) must be settled by the guest directly.",
+        "• Occupancy: The room is confirmed for the number of guests mentioned above. Any change in occupancy must be approved by the hotel.",
+        "• Hotel Rights: The hotel reserves the right to refuse admission or request a guest to leave for inappropriate conduct.",
+        "• Liability: The hotel is not responsible for the loss or damage of personal belongings unless deposited in the hotel's safety deposit box.",
+        "• Reservation Non-Transferable: This booking is non-transferable and may not be resold.",
+        "• City Tax: City tax (if any) is not included and must be paid and settled directly at the hotel.",
+        "• Bed Type: Bed type is subject to availability and cannot be guaranteed."
     ]
     rows = [[Paragraph(l, s)] for l in lines]
     t = Table(rows, colWidths=[w])
     t.setStyle(TableStyle([
-        ("VALIGN", (0,0), (-1,-1), "TOP"), ("BOX", (0,0), (-1,-1), 1.0, black), # Black Border
+        ("VALIGN", (0,0), (-1,-1), "TOP"), ("BOX", (0,0), (-1,-1), 1.0, black),
         ("PADDING", (0,0), (-1,-1), 2), ("LINEBELOW", (0,0), (-1,-2), 0.25, lightgrey)
     ]))
     return t
@@ -351,8 +345,8 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
     left = 40; right = w - 40; top = h - 40; content_w = right - left
     styles = getSampleStyleSheet()
     
-    # Bold Address Style (Small Font 7.5pt)
-    addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=7.5, leading=9, fontName="Helvetica-Bold", textColor=black)
+    # Bold Paragraph Style for wrapping long names (Fixes overlap)
+    info_style = ParagraphStyle("info", parent=styles["Normal"], fontSize=7.5, leading=9, fontName="Helvetica-Bold", textColor=black)
 
     for idx, room in enumerate(rooms_list):
         if idx > 0: c.showPage()
@@ -361,22 +355,24 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # 1. HEADER (Center)
         y = _draw_header(c, w, y)
 
-        # PREPARE DATA ROWS
-        # Left Column: Guest Information + Room Details
+        # PREPARE DATA ROWS (Use Paragraph for wrapping)
+        guest_p = Paragraph(room["guest"], info_style)
+        room_p = Paragraph(data["room_type"], info_style)
+        
         guest_rows = [
-            ["Guest Name:", room["guest"]],
-            ["Room Type:", data["room_type"]],
+            ["Guest Name:", guest_p],
+            ["Room Type:", room_p],
             ["No. of Pax:", f'{data["adults"]} Adults'],
             ["Meal Plan:", data["meal_plan"]],
             ["Cancellation:", data["cancellation"]]
         ]
         
-        # Right Column: Hotel Details + Conf No
         addr_str = f"{hotel_info.get('addr1','')}\n{hotel_info.get('addr2','')}".strip()
-        addr_para = Paragraph(addr_str.replace('\n', '<br/>'), addr_style)
+        addr_para = Paragraph(addr_str.replace('\n', '<br/>'), info_style)
+        hotel_name_p = Paragraph(data["hotel"], info_style)
         
         hotel_rows = [
-            ["Hotel:", data["hotel"]],
+            ["Hotel:", hotel_name_p],
             ["Address:", addr_para],
             ["Check-In:", data["checkin"].strftime("%d %b %Y")],
             ["Check-Out:", data["checkout"].strftime("%d %b %Y")],
@@ -395,10 +391,9 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
         
-        # Check overlap for Policy
         if y - ph < MIN_CONTENT_Y: 
             c.showPage()
-            y = 800 # Start fresh on new page
+            y = 800 
         
         pt.drawOn(c, left, y - ph); y -= (ph + 15)
 
@@ -408,10 +403,9 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         tnc = _build_tnc_table(content_w, lead_guest)
         _, th = tnc.wrapOn(c, content_w, 9999)
         
-        # Check overlap for T&C
         if y - th < MIN_CONTENT_Y: 
             c.showPage()
-            y = 800 # Start fresh on new page
+            y = 800 
             
         tnc.drawOn(c, left, y - th)
 
@@ -421,7 +415,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 8)
         c.drawString(left, 30, f"Issued by: {COMPANY_NAME}")
         c.drawString(left, 20, f"Email: {COMPANY_EMAIL}")
-        c.drawString(left, 10, f"Address: {COMPANY_ADDRESS}")
+        c.drawString(left, 10, "Odaduu Japan : 1 Chome-3-12 Takadanobaba, Shinjuku, Tokyo 169-0075")
 
     c.save(); buffer.seek(0); return buffer
 
