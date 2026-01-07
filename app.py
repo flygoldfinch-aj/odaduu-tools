@@ -232,55 +232,83 @@ def _draw_header(c, w, y_top):
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
-def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
-    """Draws ONE giant box with thick black lines containing all info."""
+def _draw_mega_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
+    """
+    Draws a single box containing:
+    - Row 1: Guest Info (Left) | Hotel Info (Right)
+    - Row 2: Room Info (Full Width)
+    """
     
-    # Helper to add section headers
-    def section_header(title):
-        return [title.upper(), ""]
-
-    # Combine Data
-    combined_data = []
-    combined_data.append(section_header("Guest Information"))
-    combined_data.extend(guest_rows)
-    combined_data.append(["", ""]) # Spacer row
-    combined_data.append(section_header("Hotel Details"))
-    combined_data.extend(hotel_rows)
-    combined_data.append(["", ""]) # Spacer row
-    combined_data.append(section_header("Room Information"))
-    combined_data.extend(room_rows)
-
-    t = Table(combined_data, colWidths=[140, w - 140])
+    # --- SUB-TABLES ---
     
-    # Styles
-    t_style = [
-        # Global Bold Font
+    # Guest Table
+    g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
+    t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
+    t_guest.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("TEXTCOLOR", (0, 0), (-1, -1), black),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), # Header Blue
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        
-        # Outer Box (Thick Black)
-        ("BOX", (0, 0), (-1, -1), 2.0, black),
-        # Inner Grid (Thick Black)
-        ("GRID", (0, 0), (-1, -1), 1.5, black),
-        
-        ("PADDING", (0, 0), (-1, -1), 6),
+        ("padding", (0,0), (-1,-1), 2)
+    ]))
+    
+    # Hotel Table
+    h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
+    t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
+    t_hotel.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("padding", (0,0), (-1,-1), 2)
+    ]))
+    
+    # Room Table
+    r_data = [["ROOM INFORMATION", ""]]; r_data.extend(room_rows)
+    t_room = Table(r_data, colWidths=[90, w - 100])
+    t_room.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("padding", (0,0), (-1,-1), 2)
+    ]))
+
+    # --- MASTER TABLE LAYOUT ---
+    # Row 1: [Guest Table] | [Hotel Table]
+    # Row 2: [Room Table (spans 2 columns)]
+    
+    master_data = [
+        [t_guest, t_hotel],
+        [t_room, ""] # Second cell placeholder
     ]
     
-    # Style Section Headers (Blue background maybe? Or just keep simple as requested "1 box")
-    # Let's make headers span and have background to distinguish
-    header_indices = [0, len(guest_rows)+1, len(guest_rows)+1+len(hotel_rows)+1]
+    master_table = Table(master_data, colWidths=[w/2, w/2])
+    master_table.setStyle(TableStyle([
+        # Span the Room Info across both columns
+        ("SPAN", (0, 1), (1, 1)),
+        
+        # Outer Box (Thick Black 1.5pt)
+        ("BOX", (0, 0), (-1, -1), 1.5, black),
+        
+        # Inner line separating Row 1 and Row 2
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, lightgrey),
+        
+        # Inner line separating Guest and Hotel
+        ("LINEAFTER", (0, 0), (0, 0), 0.5, lightgrey),
+        
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
     
-    for idx in header_indices:
-        t_style.append(("SPAN", (0, idx), (-1, idx)))
-        t_style.append(("BACKGROUND", (0, idx), (-1, idx), Color(0.9, 0.9, 0.9))) # Light Grey BG for headers
-        t_style.append(("ALIGN", (0, idx), (-1, idx), "CENTER"))
-    
-    t.setStyle(TableStyle(t_style))
-    
-    tw, th = t.wrapOn(c, w, 9999)
-    t.drawOn(c, x, y - th)
+    tw, th = master_table.wrapOn(c, w, 9999)
+    master_table.drawOn(c, x, y - th)
     return y - th - 15
 
 def _draw_image_row(c, x, y, w, imgs):
@@ -345,8 +373,8 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
     left = 40; right = w - 40; top = h - 40; content_w = right - left
     styles = getSampleStyleSheet()
     
-    # Bold Address Style
-    addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=9, leading=11, fontName="Helvetica-Bold", textColor=black)
+    # Bold Address Style (Small Font 8pt)
+    addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=8, leading=9.5, fontName="Helvetica-Bold", textColor=black)
 
     for idx, room in enumerate(rooms_list):
         if idx > 0: c.showPage()
@@ -374,24 +402,28 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         ]
         if data.get("room_size"): room_rows.insert(1, ["Room Size:", data["room_size"]])
 
-        # 2. ONE BIG BOX (Info)
+        # 2. MEGA BOX (Info)
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
 
-        # 3. IMAGES (Below Room Info)
+        # 3. IMAGES (Below Mega Box)
         y = _draw_image_row(c, left, y, content_w, imgs)
 
+        # 4. POLICY
         y -= 10
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10.6); c.drawString(left, y, "HOTEL POLICIES"); y -= 10
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
+        # Check if policy fits, if not page break
         if y - ph < MIN_CONTENT_Y: c.showPage(); y = 800
         pt.drawOn(c, left, y - ph); y -= (ph + 15)
 
+        # 5. TNC
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
         lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
         tnc = _build_tnc_table(content_w, lead_guest)
         _, th = tnc.wrapOn(c, content_w, 9999)
         
+        # Only page break if TNC really won't fit above footer
         if y - th < MIN_CONTENT_Y: y = MIN_CONTENT_Y + th 
         tnc.drawOn(c, left, y - th)
 
