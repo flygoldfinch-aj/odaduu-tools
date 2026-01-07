@@ -145,7 +145,7 @@ def extract_pdf_data(pdf_file):
 # --- 5. PDF GENERATION (FIXED LAYOUT) ---
 
 def draw_vector_seal(c, x, y):
-    """Draws the Odaduu Seal with 'CERTIFIED VOUCHER' on top arc."""
+    """Draws the Odaduu Seal with 'ODADUU' on top arc and 'OFFICIAL' at bottom."""
     c.saveState()
     c.setStrokeColor(BRAND_BLUE); c.setFillColor(BRAND_BLUE); c.setFillAlpha(0.8); c.setLineWidth(1.5)
     
@@ -158,7 +158,7 @@ def draw_vector_seal(c, x, y):
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "ODADUU")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "TRAVEL DMC")
     
-    # Arched Text (Simplified approximation for PDF canvas)
+    # Arched Text
     c.setFont("Helvetica-Bold", 6)
     
     # Top Arc: "CERTIFIED VOUCHER"
@@ -377,6 +377,7 @@ def generate_pdf(data, info, imgs, rooms_list):
 
 st.title("🌏 Odaduu Voucher Generator")
 
+# Reset
 if st.button("🔄 Reset App"):
     for k in list(st.session_state.keys()): del st.session_state[k]
     st.rerun()
@@ -404,13 +405,13 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                         st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
                 
-                # Auto-Search Trigger
+                # Auto-Search
                 if st.session_state.hotel_name:
-                    with st.spinner("Auto-fetching details..."):
-                        if not st.session_state.city:
-                            st.session_state.city = detect_city(st.session_state.hotel_name)
-                        st.session_state.fetched_room_types = fetch_real_room_types(st.session_state.hotel_name, st.session_state.city)
-                        st.session_state.hotel_images = get_smart_images(st.session_state.hotel_name, st.session_state.city)
+                    st.session_state.found_hotels = [st.session_state.hotel_name]
+                    if not st.session_state.city:
+                        st.session_state.city = detect_city(st.session_state.hotel_name)
+                    st.session_state.fetched_room_types = fetch_real_room_types(st.session_state.hotel_name, st.session_state.city)
+                    st.session_state.hotel_images = get_smart_images(st.session_state.hotel_name, st.session_state.city)
 
                 st.session_state.last_uploaded_file = up_file.name
                 st.success("PDF Loaded!")
@@ -461,6 +462,7 @@ with c1:
                 else:
                     col_b.text_input("Conf No", key=f"room_{i}_conf")
     else:
+        st.subheader("Bulk Upload")
         csv_file = st.file_uploader("Upload CSV", type="csv")
         if csv_file:
             df = pd.read_csv(csv_file)
@@ -468,7 +470,7 @@ with c1:
                 st.session_state.bulk_data = df.to_dict('records')
                 st.success(f"Loaded {len(df)} records.")
             else:
-                st.error("CSV Missing columns: 'Guest Name', 'Confirmation No'")
+                st.error("CSV Error: Missing 'Guest Name' or 'Confirmation No' columns.")
 
 with c2:
     st.subheader("3. Stay Details")
@@ -485,15 +487,14 @@ with c2:
     opts.append("Manual Entry...")
     
     sel = st.selectbox("Room Type Options", opts)
-    final_room = st.text_input("Room Type Name", value="" if sel == "Manual Entry..." else sel)
+    final_room = st.text_input("Final Room Name (Editable)", value="" if sel == "Manual Entry..." else sel)
     
-    c2c, c2d = st.columns(2)
-    c2c.number_input("Adults", 1, key="adults")
-    c2d.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
+    st.number_input("Adults", 1, key="adults")
+    st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
     ptype = st.radio("Policy", ["Non-Refundable", "Refundable"], horizontal=True)
     if ptype == "Refundable":
-        d = st.number_input("Free Cancel Days", 3)
+        d = st.number_input("Free Cancel Days Before", 3)
         policy_txt = f"Free Cancellation until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
     else:
         policy_txt = "Non-Refundable & Non-Amendable"
@@ -532,4 +533,4 @@ if st.button("Generate Vouchers", type="primary"):
             pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_to_process)
             
             st.success(f"Generated {len(rooms_to_process)} Vouchers!")
-            st.download_button("⬇️ Download PDF", pdf_bytes, "Vouchers.pdf", "application/pdf")
+            st.download_button("⬇️ Download All Vouchers (PDF)", pdf_bytes, "Vouchers.pdf", "application/pdf")
