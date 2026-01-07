@@ -1,21 +1,3 @@
-I have updated the code to prioritize a **One-Page Layout** and reorganized the fields as requested.
-
-### 🛠️ Key Fixes for One-Page Fit:
-
-1. **Compact Spacing:** Reduced the internal padding of the "Mega-Box" from **6 to 3 points**. This saves significant vertical space.
-2. **Smart Scaling:** Added logic to check the remaining space on the page. If space is tight, it automatically:
-* **Shrinks the Images** (proportionally).
-* **Reduces the T&C Font Size** (down to 5pt if necessary).
-* **Tightens Gaps** between sections.
-
-
-3. **Field Location:** Confirmed that **Confirmation No, Meal Plan, and No. of Nights** are strictly located in the **Room Information** section (bottom of the box).
-
-### 💾 Final Code (`app.py`)
-
-Please replace your entire file with this version.
-
-```python
 import streamlit as st
 import google.generativeai as genai
 import requests
@@ -46,7 +28,6 @@ LOGO_FILE = "logo.png"
 
 FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
-# Lower limit for content to ensure it doesn't hit footer
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT 
 
 try:
@@ -66,7 +47,7 @@ def init_state():
         'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 'room_type': '', 'adults': 2, 
+        'num_rooms': 1, 'room_type': '', 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'fetched_room_types': [], 'ai_room_str': '',
@@ -79,9 +60,13 @@ def init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+            
+    # Initialize dynamic room keys (Guest, Conf, Adults, Children)
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
+        if f'room_{i}_adults' not in st.session_state: st.session_state[f'room_{i}_adults'] = 2
+        if f'room_{i}_children' not in st.session_state: st.session_state[f'room_{i}_children'] = 0
 
 init_state()
 
@@ -247,20 +232,24 @@ def draw_vector_seal(c, x, y):
     c.restoreState()
 
 def _draw_header(c, w, y_top):
+    # Centered Logo
     logo_w, logo_h = 140, 55
     try: 
         c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
     
+    # Centered Title
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
 def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
     """
-    Draws ONE giant box with thick black lines.
-    Reduced padding (3px) to save space.
+    Draws ONE giant box with thick black lines containing two columns:
+    Left: Guest Info
+    Right: Hotel Details
+    Bottom: Room Info (including Conf No, Meal, Nights)
     """
     
     # Left Column Data (Guest Info)
@@ -293,7 +282,9 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # Master Table
+    # Master Table: 
+    # Row 0: Guest | Hotel
+    # Row 1: Room (Span 2)
     master_data = [[t_guest, t_hotel], [t_room, ""]]
     
     master_table = Table(master_data, colWidths=[w/2, w/2])
@@ -303,7 +294,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("LINEBELOW", (0, 0), (1, 0), 0.5, lightgrey), 
         ("LINEAFTER", (0, 0), (0, 0), 0.5, lightgrey),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        # COMPACT PADDING (3px) to save space
         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
@@ -316,9 +306,12 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    gap = 0.01 * scale_factor 
+    # 0.1 point gap (virtually seamless)
+    gap = 0.1 * scale_factor 
     img_w = (w - (2 * gap)) / 3
-    img_h = 100 * scale_factor # Standard large height
+    
+    # Standard height 100
+    img_h = 100 * scale_factor 
     
     for i in range(min(3, len(valid))):
         im = valid[i]
@@ -413,7 +406,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Check-Out:", data["checkout"].strftime("%d %b %Y")],
         ]
         
-        # Room Info (Now contains Meal, Conf, Nights)
+        # Room Info (Expanded with Meal, Conf, Nights)
         room_rows = [
             ["Room Type:", room_p],
             ["Room Size:", data["room_size"] or "N/A"],
@@ -429,19 +422,13 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # 2. MEGA BOX
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
         
-        # Check space for images + policy + TNC + footer
+        # Check space
         space_left = y - MIN_CONTENT_Y
         
-        # Smart Shrink Logic
-        if space_left < 330:
-            # Need to save space
-            deficit = 330 - space_left
-            if deficit > 50:
-                scale = 0.75 # Big shrink
-                tnc_font = 6
-            else:
-                scale = 0.9 # Small shrink
-                
+        if space_left < 320:
+            scale = 0.8 # Shrink images
+            tnc_font = 6 # Shrink text
+            
         # 3. IMAGES
         y = _draw_image_row(c, left, y, content_w, imgs, scale)
 
@@ -450,14 +437,15 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10.6); c.drawString(left, y, "HOTEL POLICIES"); y -= 10
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
+        if y - ph < MIN_CONTENT_Y: 
+            tnc_font = 5.5 
         pt.drawOn(c, left, y - ph); y -= (ph + 12)
         
-        # 5. TNC (Auto-Fit)
+        # 5. TNC
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
         lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
         
-        # Final safety check for TNC
-        if y - MIN_CONTENT_Y < 120: tnc_font = 5.5
+        if y - MIN_CONTENT_Y < 120: tnc_font = 5
             
         tnc = _build_tnc_table(content_w, lead_guest, tnc_font)
         _, th = tnc.wrapOn(c, content_w, 9999)
@@ -623,5 +611,3 @@ if st.button("Generate Voucher", type="primary"):
             st.download_button("Download", pdf, "Voucher.pdf", "application/pdf")
         else:
             st.error("No guest data found.")
-
-```
