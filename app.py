@@ -28,6 +28,7 @@ LOGO_FILE = "logo.png"
 
 FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
+# We allow drawing a bit lower if needed to squeeze into one page
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT 
 
 try:
@@ -47,7 +48,7 @@ def init_state():
         'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 'room_type': '', 
+        'num_rooms': 1, 'room_type': '', 'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'fetched_room_types': [], 'ai_room_str': '',
@@ -60,13 +61,9 @@ def init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-            
-    # Initialize dynamic room keys (Guest, Conf, Adults, Children)
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
-        if f'room_{i}_adults' not in st.session_state: st.session_state[f'room_{i}_adults'] = 2
-        if f'room_{i}_children' not in st.session_state: st.session_state[f'room_{i}_children'] = 0
 
 init_state()
 
@@ -306,7 +303,7 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # REDUCED GAP TO 0.1
+    # Only 0.1 point gap
     gap = 0.1 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     
@@ -533,12 +530,22 @@ with c1:
     
     if st.radio("Mode", ["Manual", "Bulk"]) == "Manual":
         n = st.number_input("Rooms", 1, 50, key="num_rooms")
+        
+        # --- FIXED "SAME CONF" LOGIC ---
         same = st.checkbox("Same Conf?", key="same_conf_check")
+        
         for i in range(n):
             c_a, c_b, c_c, c_d = st.columns([3, 2, 1, 1])
             c_a.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
-            val = st.session_state.get(f"room_{0}_conf",'') if same and i>0 else st.session_state.get(f"room_{i}_conf",'')
-            c_b.text_input(f"Conf {i+1}", value=val, key=f"room_{i}_conf")
+            
+            # Logic: If Room > 0 AND 'same' is checked, disable input and copy Room 0 value
+            if i > 0 and same:
+                # Force update session state to match room 0
+                st.session_state[f"room_{i}_conf"] = st.session_state.get(f"room_{0}_conf", "")
+                c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf", disabled=True)
+            else:
+                c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf")
+                
             c_c.number_input("Adt", 1, 10, key=f"room_{i}_adults")
             c_d.number_input("Chd", 0, 10, key=f"room_{i}_children")
     else:
@@ -574,7 +581,12 @@ if st.button("Generate Voucher", type="primary"):
         if not st.session_state.bulk_data:
             mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
-                c = mc if st.session_state.same_conf_check else st.session_state.get(f"room_{i}_conf", "")
+                # Ensure we pick up the 'frozen' value if same_conf is active
+                if i > 0 and st.session_state.same_conf_check:
+                    c = mc
+                else:
+                    c = st.session_state.get(f"room_{i}_conf", "")
+                    
                 rooms.append({
                     "guest": st.session_state.get(f"room_{i}_guest", ""),
                     "conf": c,
