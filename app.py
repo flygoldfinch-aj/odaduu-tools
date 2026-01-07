@@ -3,11 +3,10 @@ import google.generativeai as genai
 import requests
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.colors import Color, lightgrey, black, white, HexColor
-from reportlab.platypus import Table, TableStyle, Paragraph, Image as PlatypusImage
+from reportlab.lib.colors import Color, lightgrey, black, white
+from reportlab.platypus import Table, TableStyle, Paragraph, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.utils import ImageReader
-from reportlab.lib.units import inch
 from datetime import datetime, timedelta
 import io
 import pandas as pd
@@ -20,9 +19,8 @@ from math import sin, cos, radians
 st.set_page_config(page_title="Odaduu Voucher Tool", page_icon="🌏", layout="wide")
 
 # --- BRANDING ---
-# Exact colors from your reference
-BRAND_BLUE = Color(0.05, 0.25, 0.45) # Deep Blue
-BRAND_GOLD = Color(0.85, 0.65, 0.13) # Gold
+BRAND_BLUE = Color(0.0, 0.25, 0.5) 
+BRAND_GOLD = Color(0.9, 0.75, 0.1) 
 COMPANY_NAME = "Odaduu Travel DMC"
 LOGO_FILE = "logo.png"
 
@@ -142,10 +140,9 @@ def extract_pdf_data(pdf_file):
         return json.loads(res.replace("```json", "").replace("```", "").strip())
     except: return None
 
-# --- 5. PDF GENERATION (DYNAMIC FLOW LAYOUT) ---
+# --- 5. PDF GENERATION (DYNAMIC FLOW LAYOUT - FIXED) ---
 
 def draw_vector_seal(c, x, y):
-    """Draws Odaduu Seal with 'CERTIFIED VOUCHER' top and 'OFFICIAL' bottom."""
     c.saveState()
     c.setStrokeColor(BRAND_BLUE); c.setFillColor(BRAND_BLUE); c.setFillAlpha(0.8); c.setLineWidth(1.5)
     
@@ -158,7 +155,6 @@ def draw_vector_seal(c, x, y):
     
     c.setFont("Helvetica-Bold", 6)
     
-    # "CERTIFIED VOUCHER" (Top)
     text_top = "CERTIFIED VOUCHER"
     angle_start = 140
     for i, char in enumerate(text_top):
@@ -172,7 +168,6 @@ def draw_vector_seal(c, x, y):
         c.drawCentredString(0, 0, char)
         c.restoreState()
 
-    # "OFFICIAL" (Bottom)
     text_bot = "OFFICIAL"
     angle_start = 240
     for i, char in enumerate(text_bot):
@@ -196,7 +191,7 @@ def generate_pdf(data, info, imgs, rooms_list):
     right_margin = w - 40
     content_width = right_margin - left_margin
     
-    # Pre-load images
+    # Load images
     i_ext = get_img_reader(imgs[0])
     i_lobby = get_img_reader(imgs[1])
     i_room = get_img_reader(imgs[2])
@@ -206,9 +201,8 @@ def generate_pdf(data, info, imgs, rooms_list):
         
         y = h - 40
         
-        # 1. HEADER (Logo Left, Title Right)
-        try: 
-            c.drawImage(LOGO_FILE, left_margin, y-40, 120, 40, mask='auto', preserveAspectRatio=True)
+        # 1. HEADER
+        try: c.drawImage(LOGO_FILE, left_margin, y-40, 120, 40, mask='auto', preserveAspectRatio=True)
         except: 
             c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 20); c.drawString(left_margin, y-25, COMPANY_NAME)
         
@@ -231,9 +225,10 @@ def generate_pdf(data, info, imgs, rooms_list):
         else:
             y -= 10 
 
-        # --- DYNAMIC TABLE ENGINE (Prevents Overlap) ---
-        def draw_section(title, data_list, col_widths):
+        # --- DYNAMIC TABLE DRAWING FUNCTION ---
+        def draw_section_table(title, data_list):
             nonlocal y
+            
             # Title
             c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, y, title)
             y -= 4
@@ -241,7 +236,7 @@ def generate_pdf(data, info, imgs, rooms_list):
             y -= 5
             
             # Styles
-            t = Table(data_list, colWidths=col_widths)
+            t = Table(data_list, colWidths=[110, 390])
             t.setStyle(TableStyle([
                 ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
                 ('FONTNAME', (1,0), (1,-1), 'Helvetica'),
@@ -252,40 +247,42 @@ def generate_pdf(data, info, imgs, rooms_list):
                 ('BOTTOMPADDING', (0,0), (-1,-1), 6),
             ]))
             
-            # Wrap & Draw
-            tw, th = t.wrapOn(c, content_width, 500) # Give it space to measure
+            # Measure Height
+            tw, th = t.wrapOn(c, content_width, 500)
             
-            # Check Page Break
-            if y - th < 50: 
+            # Page Break Check
+            if y - th < 50:
                 c.showPage(); y = h - 50
             
+            # Draw
             t.drawOn(c, left_margin, y - th)
-            y -= (th + 15) # Move cursor down by exact height of table + gap
+            y -= (th + 15) # Advance cursor down
 
         # 3. GUEST INFO
-        draw_section("Guest Information", [
+        draw_section_table("Guest Information", [
             ["Guest Name(s):", room['guest']],
             ["Confirmation No:", room['conf']],
             ["Booking Date:", datetime.now().strftime("%d %b %Y")]
-        ], [110, 390])
+        ])
 
-        # 4. HOTEL DETAILS (Address can be long, so dynamic height is key)
-        draw_section("Hotel Details", [
+        # 4. HOTEL DETAILS (With Wrapped Address)
+        addr_para = Paragraph(info.get('addr1', ''), getSampleStyleSheet()['Normal'])
+        draw_section_table("Hotel Details", [
             ["Hotel:", data['hotel']],
-            ["Address:", Paragraph(info.get('addr1', ''), getSampleStyleSheet()['Normal'])], # Wrap Text
+            ["Address:", addr_para], 
             ["Check-In:", data['in'].strftime("%d %b %Y")],
             ["Check-Out:", data['out'].strftime("%d %b %Y")]
-        ], [110, 390])
+        ])
 
         # 5. ROOM INFO
-        draw_section("Room Information", [
+        draw_section_table("Room Information", [
             ["Room Type:", data['room_type']],
             ["Pax:", f"{data['adults']} Adults"],
             ["Meal Plan:", data['meal']],
             ["Cancellation:", data['policy']]
-        ], [110, 390])
+        ])
 
-        # 6. POLICY TABLE (Grid Style)
+        # 6. POLICIES (Grid)
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, y, "HOTEL POLICIES")
         y -= 15
         
@@ -310,7 +307,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         pol_table.drawOn(c, left_margin, y - ph)
         y -= (ph + 15)
 
-        # 7. T&C (Small Font)
+        # 7. T&C
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y, "STANDARD TERMS & CONDITIONS")
         y -= 12
         
@@ -329,10 +326,11 @@ def generate_pdf(data, info, imgs, rooms_list):
         
         c.setFillColor(black); c.setFont("Helvetica", 7)
         for line in tnc_text:
+            if y < 60: c.showPage(); y = h - 50
             c.drawString(left_margin, y, line)
             y -= 9 
 
-        # 8. FOOTER SEAL (Fixed at bottom)
+        # 8. FOOTER
         draw_vector_seal(c, w - 130, 45)
         c.setStrokeColor(BRAND_GOLD); c.setLineWidth(3); c.line(0, 40, w, 40)
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 8); c.drawString(left_margin, 25, f"Issued by: {COMPANY_NAME}")
@@ -381,9 +379,12 @@ with c1:
     st.subheader("1. Search Hotel")
     search_q = st.text_input("Enter Hotel Name", key="hotel_search_query")
     
-    if st.button("🔎 Search"):
-        with st.spinner("Fetching data..."):
-            st.session_state.found_hotels = find_hotel_options(search_q)
+    # SEARCH BUTTON (UPDATED)
+    def run_search():
+        if st.session_state.hotel_search_query:
+            st.session_state.found_hotels = find_hotel_options(st.session_state.hotel_search_query)
+            
+    st.button("🔎 Search", on_click=run_search)
     
     if st.session_state.found_hotels:
         selected = st.selectbox("Select Hotel", st.session_state.found_hotels)
@@ -406,7 +407,7 @@ with c1:
         same = st.checkbox("Same Conf?", key="same_conf_check")
         for i in range(n):
             col_a, col_b = st.columns([2, 1])
-            col_a.text_input(f"Room {i+1} Guest(s)", key=f"room_{i}_guest")
+            col_a.text_input(f"Room {i+1} Guest(s)", key=f"room_{i}_guest", help="Multiple names allowed")
             if i == 0: col_b.text_input("Conf", key=f"room_{i}_conf")
             elif not same: col_b.text_input("Conf", key=f"room_{i}_conf")
     else:
@@ -438,7 +439,7 @@ with c2:
     if st.radio("Policy", ["Non-Ref", "Refundable"], horizontal=True) == "Refundable":
         d = st.number_input("Free Cancel Days", 3)
         pol = f"Free Cancel until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
-    else: pol = "Non-Refundable"
+    else: pol = "Non-Refundable & Non-Amendable"
 
 if st.button("Generate Vouchers", type="primary"):
     with st.spinner("Processing..."):
