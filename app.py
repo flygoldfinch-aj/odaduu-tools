@@ -36,7 +36,7 @@ except Exception:
 def init_state():
     keys = {
         'hotel_search_query': '',
-        'found_hotels': [], # List of hotel names found
+        'found_hotels': [], 
         'hotel_name': '', 
         'city': '', 
         'checkin': datetime.now().date(), 
@@ -90,13 +90,12 @@ def google_search(query, num=5):
 def find_hotel_options(keyword):
     """Step 1: Search for hotels matching the keyword."""
     results = google_search(f"Hotel {keyword} official site")
-    # Extract titles that look like hotel names
     hotels = []
     for item in results:
         title = item.get('title', '').split('|')[0].split('-')[0].strip()
         if title and title not in hotels:
             hotels.append(title)
-    return hotels[:5] # Return top 5
+    return hotels[:5]
 
 def detect_city(hotel_name):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -154,7 +153,7 @@ def extract_pdf_data(pdf_file):
         return json.loads(res.replace("```json", "").replace("```", "").strip())
     except: return None
 
-# --- 5. PDF GENERATION (EXACT LAYOUT) ---
+# --- 5. PDF GENERATION ---
 
 def draw_vector_seal(c, x, y):
     c.saveState()
@@ -214,7 +213,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         label_val("Meal:", data['meal']); y-=15
         label_val("Cancellation:", data['policy']); y-=20
 
-        # Images (Force 3 Layout)
+        # Images
         if i_ext or i_lobby or i_room:
             ix = left
             valid_imgs = [x for x in [i_ext, i_lobby, i_room] if x]
@@ -223,7 +222,7 @@ def generate_pdf(data, info, imgs, rooms_list):
                 except: pass
             y -= 110
 
-        # --- POLICY TABLE (Specific "Time/Detail" Layout) ---
+        # Policies
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left, y, "HOTEL POLICIES"); y-=15
         pt_data = [
             ["Policy", "Time / Detail"],
@@ -243,7 +242,7 @@ def generate_pdf(data, info, imgs, rooms_list):
         ]))
         t.wrapOn(c, w, h); t.drawOn(c, left, y-70); y -= 90
 
-        # --- T&C BOX (Specific 10 Points) ---
+        # T&C
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS"); y-=15
         tnc = [
             "1. Voucher Validity: This voucher is for the dates and services specified above. It must be presented at the hotel's front desk upon arrival.",
@@ -258,7 +257,6 @@ def generate_pdf(data, info, imgs, rooms_list):
             "10. Bed Type: Bed type is subject to availability and cannot be guaranteed."
         ]
         styleN = getSampleStyleSheet()["Normal"]; styleN.fontSize = 8; styleN.leading = 9
-        # Draw T&C as simple paragraphs to save space
         for line in tnc:
             p = Paragraph(line, styleN)
             p.wrapOn(c, w-80, 50)
@@ -273,16 +271,15 @@ def generate_pdf(data, info, imgs, rooms_list):
     
     c.save(); buffer.seek(0); return buffer
 
-# --- 7. UI LOGIC ---
+# --- 6. UI LOGIC ---
 
 st.title("🌏 Odaduu Voucher Generator")
 
-# Reset
 if st.button("🔄 Reset App"):
     for k in list(st.session_state.keys()): del st.session_state[k]
     st.rerun()
 
-# --- UPLOAD SECTION ---
+# UPLOAD
 with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
     up_file = st.file_uploader("Drop PDF here", type="pdf")
     if up_file and st.session_state.last_uploaded_file != up_file.name:
@@ -298,7 +295,6 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                 st.session_state.meal_plan = data.get('meal_plan', 'Breakfast Only')
                 st.session_state.ai_room_str = clean_extracted_text(data.get('rooms', [{}])[0].get('room_type', ''))
                 
-                # Load rooms
                 rooms = data.get('rooms', [])
                 if rooms:
                     st.session_state.num_rooms = len(rooms)
@@ -306,9 +302,9 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                         st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
                 
-                # Trigger Auto-Search immediately
+                # Auto-Search
                 if st.session_state.hotel_name:
-                    st.session_state.found_hotels = [st.session_state.hotel_name] # Treat extraction as a found hotel
+                    st.session_state.found_hotels = [st.session_state.hotel_name]
                     if not st.session_state.city:
                         st.session_state.city = detect_city(st.session_state.hotel_name)
                     st.session_state.fetched_room_types = fetch_real_room_types(st.session_state.hotel_name, st.session_state.city)
@@ -318,26 +314,22 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                 st.success("PDF Loaded!")
                 st.rerun()
 
-# --- MAIN FORM ---
+# MAIN FORM
 c1, c2 = st.columns(2)
 
 with c1:
-    # 1. HOTEL SEARCH WORKFLOW
     st.subheader("Hotel Details")
-    search_q = st.text_input("Enter Hotel Name Keyword (e.g. 'Atlantis')", key="hotel_search_query")
+    search_q = st.text_input("Enter Hotel Name Keyword", key="hotel_search_query")
     
     if st.button("🔎 Find Hotels"):
         with st.spinner("Searching..."):
             st.session_state.found_hotels = find_hotel_options(search_q)
     
-    # Dropdown for found hotels
     if st.session_state.found_hotels:
         selected_hotel = st.selectbox("Select Hotel", st.session_state.found_hotels, key="hotel_selector")
-        
-        # When a hotel is selected, auto-fetch details if changed
         if selected_hotel != st.session_state.hotel_name:
             st.session_state.hotel_name = selected_hotel
-            with st.spinner("Fetching City, Images & Room Types..."):
+            with st.spinner("Fetching details..."):
                 st.session_state.city = detect_city(selected_hotel)
                 st.session_state.fetched_room_types = fetch_real_room_types(selected_hotel, st.session_state.city)
                 st.session_state.hotel_images = get_smart_images(selected_hotel, st.session_state.city)
@@ -346,7 +338,6 @@ with c1:
     st.text_input("Final Hotel Name", key="hotel_name")
     st.text_input("City", key="city")
 
-    # --- INPUT MODE ---
     input_mode = st.radio("Input Mode", ["Manual Entry", "Bulk Upload (CSV)"], horizontal=True)
     
     if input_mode == "Manual Entry":
@@ -368,7 +359,6 @@ with c1:
                     
     else:
         st.subheader("Bulk Upload")
-        st.info("CSV Columns: **Guest Name**, **Confirmation No**")
         csv_file = st.file_uploader("Upload CSV", type="csv")
         if csv_file:
             df = pd.read_csv(csv_file)
@@ -385,7 +375,6 @@ with c2:
     st.date_input("Check-In", key="checkin")
     st.date_input("Check-Out", key="checkout", min_value=st.session_state.checkin + timedelta(days=1))
     
-    # Room Type Dropdown from Fetch
     opts = []
     if st.session_state.ai_room_str: opts.append(st.session_state.ai_room_str)
     if st.session_state.fetched_room_types: opts.extend(st.session_state.fetched_room_types)
@@ -405,7 +394,6 @@ with c2:
         policy_txt = "Non-Refundable & Non-Amendable"
     st.info(f"Policy: {policy_txt}")
 
-# --- GENERATION ---
 if st.button("Generate Vouchers", type="primary"):
     with st.spinner("Processing..."):
         rooms_to_process = []
@@ -428,8 +416,7 @@ if st.button("Generate Vouchers", type="primary"):
             st.error("No guest data found!")
         else:
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
-            # Use cached images
-            imgs = st.session_state.hotel_images
+            imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
             
             pdf_data = {
                 "hotel": st.session_state.hotel_name,
