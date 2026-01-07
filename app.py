@@ -49,43 +49,19 @@ def init_state():
         'num_rooms': 1, 'room_type': '', 'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
-        'cancel_days': 3, 
-        'room_size': '',
-        'room_options': [], 'suggestions': [], 'last_uploaded_file': None,
-        'policy_text_manual': '',
-        'search_query': '',
-        'room_sel': ''
+        'fetched_room_types': [], 'ai_room_str': '',
+        'last_uploaded_file': None, 'bulk_data': [],
+        'hotel_images': [None, None, None],
+        'selected_hotel_key': None
     }
-    
-    for i in range(10):
-        defaults[f'room_{i}_guest'] = ''
-        defaults[f'room_{i}_conf'] = ''
-
-    for key, val in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = val
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+    for i in range(50):
+        if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
+        if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
 
 init_state()
-
-def reset_booking_state():
-    """Hard reset of all data fields."""
-    st.session_state.hotel_name = ''
-    st.session_state.city = ''
-    st.session_state.num_rooms = 1
-    st.session_state.room_type = ''
-    st.session_state.room_size = ''
-    st.session_state.room_options = []
-    st.session_state.policy_text_manual = ''
-    st.session_state.suggestions = []
-    st.session_state.room_sel = '' 
-    
-    for i in range(10):
-        st.session_state[f'room_{i}_guest'] = ''
-        st.session_state[f'room_{i}_conf'] = ''
-    
-    if 'search_input' in st.session_state:
-        st.session_state.search_input = ""
-    st.session_state.search_query = ""
 
 # =====================================
 # 3) HELPER FUNCTIONS
@@ -153,6 +129,53 @@ def fetch_hotel_details_text(hotel, city, r_type):
     try: return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
     except: return {}
 
+def fetch_hotel_data_callback():
+    """Callback to populate data immediately upon selection."""
+    selected_hotel = st.session_state.selected_hotel_key
+    if not selected_hotel: return
+    
+    st.session_state.hotel_name = selected_hotel
+    
+    # Use Gemini to get City and Room Types from Google Search snippets
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # 1. City & Room Types
+    try:
+        search_res = google_search(f"{selected_hotel} location room types")
+        snippets = "\n".join([i.get('snippet','') for i in search_res])
+        prompt = f"""Based on these search results for "{selected_hotel}":\n{snippets}\n1. Identify the City.\n2. List 3-5 distinct Room Types found.\nReturn JSON: {{ "city": "CityName", "rooms": ["Type A", "Type B"] }}"""
+        raw = model.generate_content(prompt).text
+        data = json.loads(raw.replace("```json", "").replace("```", "").strip())
+        st.session_state.city = data.get("city", "")
+        st.session_state.fetched_room_types = data.get("rooms", [])
+    except: 
+        st.session_state.city = ""
+        st.session_state.fetched_room_types = ["Standard", "Deluxe"]
+
+    # 2. Images
+    base_q = f"{selected_hotel} {st.session_state.city}"
+    st.session_state.hotel_images = [
+        fetch_image(f"{base_q} hotel exterior"),
+        fetch_image(f"{base_q} hotel lobby"),
+        fetch_image(f"{base_q} hotel room")
+    ]
+
+def google_search(query, num=5):
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
+        res = requests.get(url, params=params, timeout=5)
+        return res.json().get("items", []) if res.status_code == 200 else []
+    except: return []
+
+def find_hotel_options(keyword):
+    results = google_search(f"Hotel {keyword} official site")
+    hotels = []
+    for item in results:
+        title = item.get('title', '').split('|')[0].split('-')[0].strip()
+        if title and title not in hotels: hotels.append(title)
+    return hotels[:5]
+
 def fetch_image(query):
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
@@ -168,7 +191,7 @@ def get_img_reader(url):
     except: return None
 
 # =====================================
-# 5) NEW "FROM SCRATCH" PDF ENGINE
+# 5) PDF GENERATION
 # =====================================
 
 def draw_vector_seal(c, x, y):
@@ -184,14 +207,11 @@ def draw_vector_seal(c, x, y):
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy - 6, "TRAVEL DMC")
     
     c.setFont("Helvetica-Bold", 6)
-    # Top Arc text
     text_top = "CERTIFIED VOUCHER"; angle_start = 140
     for i, char in enumerate(text_top):
         angle = angle_start - (i * 10); rad = radians(angle)
         tx = cx + 32 * cos(rad); ty = cy + 32 * sin(rad)
         c.saveState(); c.translate(tx, ty); c.rotate(angle - 90); c.drawCentredString(0, 0, char); c.restoreState()
-        
-    # Bottom Arc text
     text_bot = "OFFICIAL"; angle_start = 240
     for i, char in enumerate(text_bot):
         angle = angle_start + (i * 12); rad = radians(angle)
@@ -199,76 +219,85 @@ def draw_vector_seal(c, x, y):
         c.saveState(); c.translate(tx, ty); c.rotate(angle + 90); c.drawCentredString(0, 0, char); c.restoreState()
     c.restoreState()
 
-def _draw_header(c, left, right, y_top):
-    # Logo Left
+def _draw_header(c, w, y_top):
+    # Centered Logo
+    logo_w, logo_h = 140, 55
     try: 
-        c.drawImage(LOGO_FILE, left, y_top - 40, 100, 40, mask='auto', preserveAspectRatio=True)
+        c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 20); c.drawString(left, y_top - 30, "ODADUU")
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
     
-    # Title Right
+    # Centered Title
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
-    c.drawRightString(right, y_top - 30, "HOTEL CONFIRMATION VOUCHER")
-    return y_top - 50
+    c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
+    return y_top - logo_h - 40
+
+def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
+    """Draws ONE giant box with thick black lines containing all info."""
+    
+    # Helper to add section headers
+    def section_header(title):
+        return [title.upper(), ""]
+
+    # Combine Data
+    combined_data = []
+    combined_data.append(section_header("Guest Information"))
+    combined_data.extend(guest_rows)
+    combined_data.append(["", ""]) # Spacer row
+    combined_data.append(section_header("Hotel Details"))
+    combined_data.extend(hotel_rows)
+    combined_data.append(["", ""]) # Spacer row
+    combined_data.append(section_header("Room Information"))
+    combined_data.extend(room_rows)
+
+    t = Table(combined_data, colWidths=[140, w - 140])
+    
+    # Styles
+    t_style = [
+        # Global Bold Font
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TEXTCOLOR", (0, 0), (-1, -1), black),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        
+        # Outer Box (Thick Black)
+        ("BOX", (0, 0), (-1, -1), 2.0, black),
+        # Inner Grid (Thick Black)
+        ("GRID", (0, 0), (-1, -1), 1.5, black),
+        
+        ("PADDING", (0, 0), (-1, -1), 6),
+    ]
+    
+    # Style Section Headers (Blue background maybe? Or just keep simple as requested "1 box")
+    # Let's make headers span and have background to distinguish
+    header_indices = [0, len(guest_rows)+1, len(guest_rows)+1+len(hotel_rows)+1]
+    
+    for idx in header_indices:
+        t_style.append(("SPAN", (0, idx), (-1, idx)))
+        t_style.append(("BACKGROUND", (0, idx), (-1, idx), Color(0.9, 0.9, 0.9))) # Light Grey BG for headers
+        t_style.append(("ALIGN", (0, idx), (-1, idx), "CENTER"))
+    
+    t.setStyle(TableStyle(t_style))
+    
+    tw, th = t.wrapOn(c, w, 9999)
+    t.drawOn(c, x, y - th)
+    return y - th - 15
 
 def _draw_image_row(c, x, y, w, imgs):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    gap = 8; img_h = 78; img_w = (w - (2 * gap)) / 3
+    gap = 10; img_h = 90; img_w = (w - (2 * gap)) / 3
+    # Center the images if less than 3
+    total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
+    ix = x + (w - total_w) / 2
     
-    for i in range(3):
-        im = imgs[i] if i < len(imgs) else None
-        if im:
-            try: c.drawImage(im, x + i * (img_w + gap), y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
-            except: pass
+    for i in range(min(3, len(valid))):
+        im = valid[i]
+        try: c.drawImage(im, ix, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+        except: pass
+        ix += (img_w + gap)
     return y - img_h - 15
-
-def _draw_split_info_block(c, x, y, w, guest_rows, hotel_rows):
-    """Draws Guest info on Left and Hotel info on Right (Side-by-Side)"""
-    col_w = (w - 10) / 2
-    
-    # Guest Table (Left)
-    g_data = [["Guest Information", ""]]; g_data.extend(guest_rows)
-    t_guest = Table(g_data, colWidths=[90, col_w - 90])
-    t_guest.setStyle(TableStyle([
-        ("SPAN", (0, 0), (-1, 0)), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, lightgrey), ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 1, BRAND_ORANGE),
-        ("PADDING", (0, 0), (-1, -1), 4)
-    ]))
-    gw, gh = t_guest.wrapOn(c, col_w, 500)
-    
-    # Hotel Table (Right)
-    h_data = [["Hotel Details", ""]]; h_data.extend(hotel_rows)
-    t_hotel = Table(h_data, colWidths=[70, col_w - 70])
-    t_hotel.setStyle(TableStyle([
-        ("SPAN", (0, 0), (-1, 0)), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, lightgrey), ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 1, BRAND_ORANGE),
-        ("PADDING", (0, 0), (-1, -1), 4)
-    ]))
-    hw, hh = t_hotel.wrapOn(c, col_w, 500)
-    
-    # Draw both
-    final_h = max(gh, hh)
-    t_guest.drawOn(c, x, y - gh) # Align tops
-    t_hotel.drawOn(c, x + col_w + 10, y - hh)
-    
-    return y - final_h - 10
-
-def _draw_full_width_block(c, x, y, w, title, rows):
-    data = [[title, ""]]; data.extend(rows)
-    t = Table(data, colWidths=[120, w - 120])
-    t.setStyle(TableStyle([
-        ("SPAN", (0, 0), (-1, 0)), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, lightgrey), ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 1, BRAND_ORANGE),
-        ("PADDING", (0, 0), (-1, -1), 4)
-    ]))
-    tw, th = t.wrapOn(c, w, 500)
-    t.drawOn(c, x, y - th)
-    return y - th - 10
 
 def _build_policy_table(w):
     data = [
@@ -309,21 +338,24 @@ def _build_tnc_table(w, lead_guest):
     ]))
     return t
 
-def generate_pdf_modern(data, hotel_info, rooms_list, imgs):
+def generate_pdf_final(data, hotel_info, rooms_list, imgs):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
     left = 40; right = w - 40; top = h - 40; content_w = right - left
     styles = getSampleStyleSheet()
-    addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=9, leading=10, textColor=Color(0.1, 0.1, 0.1))
+    
+    # Bold Address Style
+    addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=9, leading=11, fontName="Helvetica-Bold", textColor=black)
 
     for idx, room in enumerate(rooms_list):
         if idx > 0: c.showPage()
         y = top
-        y = _draw_header(c, left, right, y)
-        y = _draw_image_row(c, left, y, content_w, imgs)
+        
+        # 1. HEADER (Center)
+        y = _draw_header(c, w, y)
 
-        # Prepare Data for Split Block
+        # Prepare Data Rows
         guest_rows = [
             ["Guest Name:", room["guest"]], ["Confirmation No.:", room["conf"]],
             ["Booking Date:", datetime.now().strftime("%d %b %Y")]
@@ -336,21 +368,23 @@ def generate_pdf_modern(data, hotel_info, rooms_list, imgs):
             ["Check-In:", data["checkin"].strftime("%d %b %Y")], ["Check-Out:", data["checkout"].strftime("%d %b %Y")]
         ]
         
-        # DRAW SPLIT BLOCK (New Feature)
-        y = _draw_split_info_block(c, left, y, content_w, guest_rows, hotel_rows)
-        
-        # Room Block (Full Width)
-        r_rows = [
+        room_rows = [
             ["Room Type:", data["room_type"]], ["No. of Pax:", f'{data["adults"]} Adults'],
             ["Meal Plan:", data["meal_plan"]], ["Cancellation:", data["cancellation"]]
         ]
-        if data.get("room_size"): r_rows.insert(1, ["Room Size:", data["room_size"]])
-        y = _draw_full_width_block(c, left, y, content_w, "Room Information", r_rows)
+        if data.get("room_size"): room_rows.insert(1, ["Room Size:", data["room_size"]])
 
-        y -= 5
+        # 2. ONE BIG BOX (Info)
+        y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
+
+        # 3. IMAGES (Below Room Info)
+        y = _draw_image_row(c, left, y, content_w, imgs)
+
+        y -= 10
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10.6); c.drawString(left, y, "HOTEL POLICIES"); y -= 10
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
+        if y - ph < MIN_CONTENT_Y: c.showPage(); y = 800
         pt.drawOn(c, left, y - ph); y -= (ph + 15)
 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
@@ -358,7 +392,7 @@ def generate_pdf_modern(data, hotel_info, rooms_list, imgs):
         tnc = _build_tnc_table(content_w, lead_guest)
         _, th = tnc.wrapOn(c, content_w, 9999)
         
-        if y - th < MIN_CONTENT_Y: y = MIN_CONTENT_Y + th # Prevent footer overlap
+        if y - th < MIN_CONTENT_Y: y = MIN_CONTENT_Y + th 
         tnc.drawOn(c, left, y - th)
 
         draw_vector_seal(c, w - 130, 45)
@@ -399,9 +433,7 @@ with st.expander("📤 Upload PDF", expanded=True):
                         st.session_state[f"room_{i}_guest"] = str(r.get("guest_name", ""))
                 
                 if st.session_state.hotel_name:
-                    st.session_state.city = detect_city(st.session_state.hotel_name)
-                    st.session_state.fetched_room_types = fetch_real_room_types(st.session_state.hotel_name, st.session_state.city)
-                    st.session_state.hotel_images = get_smart_images(st.session_state.hotel_name, st.session_state.city)
+                    fetch_hotel_data_callback() # Trigger fetch for uploaded hotel
 
                 st.session_state.last_uploaded_file = up_file.name
                 st.success("Loaded!")
@@ -414,13 +446,12 @@ with c1:
         st.session_state.found_hotels = find_hotel_options(q)
     
     if st.session_state.found_hotels:
-        sel = st.selectbox("Select", st.session_state.found_hotels)
-        if sel != st.session_state.hotel_name:
-            st.session_state.hotel_name = sel
-            st.session_state.city = detect_city(sel)
-            st.session_state.fetched_room_types = fetch_real_room_types(sel, st.session_state.city)
-            st.session_state.hotel_images = get_smart_images(sel, st.session_state.city)
-            st.rerun()
+        st.selectbox(
+            "Select", 
+            st.session_state.found_hotels, 
+            key="selected_hotel_key",
+            on_change=fetch_hotel_data_callback
+        )
 
     st.text_input("Hotel", key="hotel_name")
     st.text_input("City", key="city")
@@ -461,8 +492,10 @@ if st.button("Generate Voucher", type="primary"):
     with st.spinner("Processing..."):
         rooms = []
         if not st.session_state.bulk_data:
+            mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
-                rooms.append({"guest": st.session_state.get(f"room_{i}_guest", ""), "conf": st.session_state.get(f"room_{i}_conf", "")})
+                c = mc if st.session_state.same_conf_check else st.session_state.get(f"room_{i}_conf", "")
+                rooms.append({"guest": st.session_state.get(f"room_{i}_guest", ""), "conf": c})
         else:
             for r in st.session_state.bulk_data:
                 rooms.append({"guest": str(r.get("Guest Name", "")), "conf": str(r.get("Confirmation No", ""))})
@@ -471,7 +504,7 @@ if st.button("Generate Voucher", type="primary"):
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
             imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
             
-            pdf = generate_pdf_modern({
+            pdf = generate_pdf_final({
                 "hotel": st.session_state.hotel_name, "checkin": st.session_state.checkin, "checkout": st.session_state.checkout,
                 "room_type": st.session_state.room_final, "adults": st.session_state.adults, "meal_plan": st.session_state.meal_plan,
                 "cancellation": pol
