@@ -28,7 +28,6 @@ LOGO_FILE = "logo.png"
 
 FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
-# We allow drawing a bit lower if needed to squeeze into one page
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT 
 
 try:
@@ -48,7 +47,7 @@ def init_state():
         'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 'room_type': '', 'adults': 2, 
+        'num_rooms': 1, 'room_type': '', 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'fetched_room_types': [], 'ai_room_str': '',
@@ -61,9 +60,13 @@ def init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+            
+    # Initialize dynamic room keys (Guest, Conf, Adults, Children)
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
+        if f'room_{i}_adults' not in st.session_state: st.session_state[f'room_{i}_adults'] = 2
+        if f'room_{i}_children' not in st.session_state: st.session_state[f'room_{i}_children'] = 0
 
 init_state()
 
@@ -303,8 +306,8 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # Only 0.5 point gap
-    gap = 0.5 * scale_factor 
+    # REDUCED GAP TO 0.1
+    gap = 0.1 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     
     # Increase height to 110 to make them BIG
@@ -383,10 +386,15 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         remarks_val = data["remarks"] if data["remarks"] else "N/A"
         remarks_p = Paragraph(remarks_val, remark_style)
 
+        # Format Pax String
+        pax_str = f'{room["adults"]} Adults'
+        if room["children"] > 0:
+            pax_str += f', {room["children"]} Children'
+
         # Guest Info
         guest_rows = [
             ["Guest Name:", guest_p],
-            ["No. of Pax:", f'{data["adults"]} Adults'],
+            ["No. of Pax:", pax_str],
             ["Cancellation:", data["cancellation"]],
             ["Remarks:", remarks_p]
         ]
@@ -490,6 +498,7 @@ with st.expander("📤 Upload PDF", expanded=True):
                     for i, r in enumerate(rooms):
                         st.session_state[f"room_{i}_conf"] = str(r.get("confirmation_no", ""))
                         st.session_state[f"room_{i}_guest"] = str(r.get("guest_name", ""))
+                        st.session_state[f"room_{i}_adults"] = int(r.get("adults", 2))
                 
                 if st.session_state.hotel_name:
                     fetch_hotel_data_callback() 
@@ -526,10 +535,12 @@ with c1:
         n = st.number_input("Rooms", 1, 50, key="num_rooms")
         same = st.checkbox("Same Conf?", key="same_conf_check")
         for i in range(n):
-            c_a, c_b = st.columns([2, 1])
-            c_a.text_input(f"Room {i+1} Guest", key=f"room_{i}_guest")
+            c_a, c_b, c_c, c_d = st.columns([3, 2, 1, 1])
+            c_a.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
             val = st.session_state.get(f"room_{0}_conf",'') if same and i>0 else st.session_state.get(f"room_{i}_conf",'')
-            st.text_input(f"Conf {i+1}", value=val, key=f"room_{i}_conf")
+            c_b.text_input(f"Conf {i+1}", value=val, key=f"room_{i}_conf")
+            c_c.number_input("Adt", 1, 10, key=f"room_{i}_adults")
+            c_d.number_input("Chd", 0, 10, key=f"room_{i}_children")
     else:
         f = st.file_uploader("CSV", type="csv")
         if f: st.session_state.bulk_data = pd.read_csv(f).to_dict("records")
@@ -547,7 +558,7 @@ with c2:
     
     st.text_input("Final Room Name", key="room_final")
     st.text_input("Room Size (e.g. 35 sqm)", key="room_size")
-    st.number_input("Adults", 1, key="adults")
+    # Adults input removed here as it is now per room
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
     st.text_area("Remarks (Optional)", key="remarks")
@@ -564,10 +575,21 @@ if st.button("Generate Voucher", type="primary"):
             mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
                 c = mc if st.session_state.same_conf_check else st.session_state.get(f"room_{i}_conf", "")
-                rooms.append({"guest": st.session_state.get(f"room_{i}_guest", ""), "conf": c})
+                rooms.append({
+                    "guest": st.session_state.get(f"room_{i}_guest", ""),
+                    "conf": c,
+                    "adults": st.session_state.get(f"room_{i}_adults", 2),
+                    "children": st.session_state.get(f"room_{i}_children", 0)
+                })
         else:
+            # Fallback for Bulk: assumes standard 2 adults if not specified in CSV
             for r in st.session_state.bulk_data:
-                rooms.append({"guest": str(r.get("Guest Name", "")), "conf": str(r.get("Confirmation No", ""))})
+                rooms.append({
+                    "guest": str(r.get("Guest Name", "")),
+                    "conf": str(r.get("Confirmation No", "")),
+                    "adults": int(r.get("Adults", 2)),
+                    "children": int(r.get("Children", 0))
+                })
         
         if rooms:
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
@@ -579,7 +601,8 @@ if st.button("Generate Voucher", type="primary"):
 
             pdf = generate_pdf_final({
                 "hotel": st.session_state.hotel_name, "checkin": st.session_state.checkin, "checkout": st.session_state.checkout,
-                "room_type": st.session_state.room_final, "adults": st.session_state.adults, "meal_plan": st.session_state.meal_plan,
+                "room_type": st.session_state.room_final, 
+                "meal_plan": st.session_state.meal_plan,
                 "cancellation": pol, "nights": n_nights, "room_size": st.session_state.room_size, "remarks": st.session_state.remarks
             }, info, rooms, imgs)
             
