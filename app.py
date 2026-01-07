@@ -303,12 +303,12 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # 0.01 point gap (virtually seamless)
+    # REDUCED GAP TO 0.01 (Virtually Seamless)
     gap = 0.01 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     
-    # Standard height 100 (reduced from 125 to avoid overflow)
-    img_h = 100 * scale_factor 
+    # Increase height to 125 to make them BIGGER
+    img_h = 125 * scale_factor 
     
     total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
     ix = x + (w - total_w) / 2
@@ -568,4 +568,57 @@ with c2:
     # Adults input removed here as it is now per room
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
-    st.text
+    st.text_area("Remarks (Optional)", key="remarks")
+    
+    pol = "Non-Refundable"
+    if st.radio("Policy", ["Non-Ref", "Ref"], horizontal=True) == "Ref":
+        d = st.number_input("Days", 3)
+        pol = f"Free Cancel until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
+
+if st.button("Generate Voucher", type="primary"):
+    with st.spinner("Processing..."):
+        rooms = []
+        if not st.session_state.bulk_data:
+            mc = st.session_state.get("room_0_conf", "")
+            for i in range(st.session_state.num_rooms):
+                # Ensure we pick up the 'frozen' value if same_conf is active
+                if i > 0 and st.session_state.same_conf_check:
+                    c = mc
+                else:
+                    c = st.session_state.get(f"room_{i}_conf", "")
+                    
+                rooms.append({
+                    "guest": st.session_state.get(f"room_{i}_guest", ""),
+                    "conf": c,
+                    "adults": st.session_state.get(f"room_{i}_adults", 2),
+                    "children": st.session_state.get(f"room_{i}_children", 0)
+                })
+        else:
+            # Fallback for Bulk: assumes standard 2 adults if not specified in CSV
+            for r in st.session_state.bulk_data:
+                rooms.append({
+                    "guest": str(r.get("Guest Name", "")),
+                    "conf": str(r.get("Confirmation No", "")),
+                    "adults": int(r.get("Adults", 2)),
+                    "children": int(r.get("Children", 0))
+                })
+        
+        if rooms:
+            info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
+            imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
+            
+            # Calculate Nights
+            n_nights = (st.session_state.checkout - st.session_state.checkin).days
+            if n_nights < 1: n_nights = 1
+
+            pdf = generate_pdf_final({
+                "hotel": st.session_state.hotel_name, "checkin": st.session_state.checkin, "checkout": st.session_state.checkout,
+                "room_type": st.session_state.room_final, 
+                "meal_plan": st.session_state.meal_plan,
+                "cancellation": pol, "nights": n_nights, "room_size": st.session_state.room_size, "remarks": st.session_state.remarks
+            }, info, rooms, imgs)
+            
+            st.success("Done!")
+            st.download_button("Download", pdf, "Voucher.pdf", "application/pdf")
+        else:
+            st.error("No guest data found.")
