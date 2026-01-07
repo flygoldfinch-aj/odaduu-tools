@@ -42,8 +42,10 @@ except Exception:
 # 2) SESSION STATE MANAGEMENT
 # =====================================
 def init_state():
+    # Define all default keys
     defaults = {
-        'hotel_name': '', 'city': '', 'lead_guest': '', 
+        'hotel_search_query': '', 'found_hotels': [], 
+        'hotel_name': '', 'city': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
         'num_rooms': 1, 'room_type': '', 'adults': 2, 
@@ -52,15 +54,21 @@ def init_state():
         'fetched_room_types': [], 'ai_room_str': '',
         'last_uploaded_file': None, 'bulk_data': [],
         'hotel_images': [None, None, None],
-        'selected_hotel_key': None
+        'selected_hotel_key': None,
+        'room_final': ''
     }
+    
+    # Initialize keys if they don't exist
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+            
+    # Initialize dynamic room keys
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
 
+# Ensure state is initialized immediately
 init_state()
 
 # =====================================
@@ -232,20 +240,16 @@ def _draw_header(c, w, y_top):
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
-def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows):
+def _draw_split_box(c, x, y, w, guest_rows, hotel_rows):
     """
-    Draws ONE giant box with thick black lines containing two columns:
+    Draws ONE giant box split into 2 columns:
     Left: Guest Info (incl Room Type, Pax, Meal, Cancellation)
     Right: Hotel Details (incl Checkin/out, Conf No)
+    Border Color: Black
     """
     
-    # Left Column Data (Guest Info + Room details moved here)
+    # --- SUB-TABLE 1: GUEST INFO (Left) ---
     g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
-    
-    # Right Column Data (Hotel Info + Conf No moved here)
-    h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
-    
-    # Create Sub-tables
     t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
     t_guest.setStyle(TableStyle([
         ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
@@ -256,6 +260,8 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
     
+    # --- SUB-TABLE 2: HOTEL DETAILS (Right) ---
+    h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
     t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
     t_hotel.setStyle(TableStyle([
         ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
@@ -266,10 +272,10 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # Master Table: 1 Row, 2 Columns
+    # --- MASTER TABLE: [Guest] | [Hotel] ---
     master_data = [[t_guest, t_hotel]]
-    
     master_table = Table(master_data, colWidths=[w/2, w/2])
+    
     master_table.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 1.5, black), # Thick Black Border
         ("LINEAFTER", (0, 0), (0, 0), 0.5, lightgrey), # Vertical Separator
@@ -289,7 +295,6 @@ def _draw_image_row(c, x, y, w, imgs):
     if not valid: return y
 
     gap = 10; img_h = 90; img_w = (w - (2 * gap)) / 3
-    # Center the images if less than 3
     total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
     ix = x + (w - total_w) / 2
     
@@ -356,8 +361,8 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # 1. HEADER (Center)
         y = _draw_header(c, w, y)
 
-        # Prepare Data Rows
-        # LEFT COLUMN: Guest Name, Room Type, Pax, Meal Plan, Cancellation
+        # PREPARE DATA ROWS
+        # Left Column: Guest Information + Room Details
         guest_rows = [
             ["Guest Name:", room["guest"]],
             ["Room Type:", data["room_type"]],
@@ -366,7 +371,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Cancellation:", data["cancellation"]]
         ]
         
-        # RIGHT COLUMN: Hotel Name, Address, Checkin, Checkout, Conf No
+        # Right Column: Hotel Details + Conf No
         addr_str = f"{hotel_info.get('addr1','')}\n{hotel_info.get('addr2','')}".strip()
         addr_para = Paragraph(addr_str.replace('\n', '<br/>'), addr_style)
         
@@ -378,8 +383,8 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Confirmation No.:", room["conf"]]
         ]
         
-        # 2. MEGA BOX (Split Info)
-        y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows)
+        # 2. MEGA BOX (2-Column Layout)
+        y = _draw_split_box(c, left, y, content_w, guest_rows, hotel_rows)
 
         # 3. IMAGES (Below Mega Box)
         y = _draw_image_row(c, left, y, content_w, imgs)
