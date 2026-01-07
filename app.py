@@ -314,15 +314,14 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # UPDATED GAP TO 0.75
+    # GAP = 0.75 as requested
     gap = 0.75 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     img_h = 100 * scale_factor # Standard height
     
     for i in range(min(3, len(valid))):
         im = valid[i]
-        curr_x = x + (i * (img_w + gap))
-        try: c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+        try: c.drawImage(im, x + i * (img_w + gap), y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
         except: pass
         
     return y - img_h - (10 * scale_factor)
@@ -430,7 +429,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # 2. MEGA BOX
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
         
-        # Check space left for images + policy + TNC + footer
+        # Check space
         space_left = y - MIN_CONTENT_Y
         
         if space_left < 320:
@@ -448,4 +447,177 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         if y - ph < MIN_CONTENT_Y: 
             # Force shrink TNC if Policy fits but barely
             tnc_font = 5.5 
-        pt.drawOn(c, left, y -
+        pt.drawOn(c, left, y - ph); y -= (ph + 12)
+        
+        # 5. TNC (Auto-Fit)
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
+        lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
+        
+        # Force fit TNC if space is tight but exists
+        if y - MIN_CONTENT_Y < 120: tnc_font = 5
+            
+        tnc = _build_tnc_table(content_w, lead_guest, tnc_font)
+        _, th = tnc.wrapOn(c, content_w, 9999)
+        tnc.drawOn(c, left, y - th)
+
+        # Footer
+        draw_vector_seal(c, w - 130, 45)
+        c.setStrokeColor(BRAND_ORANGE); c.setLineWidth(2); c.line(0, FOOTER_LINE_Y, w, FOOTER_LINE_Y)
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 8)
+        c.drawString(left, 30, f"Issued by: {COMPANY_NAME}")
+        c.drawString(left, 20, f"Email: {COMPANY_EMAIL}")
+        c.drawString(left, 10, "Odaduu Japan : 1 Chome-3-12 Takadanobaba, Shinjuku, Tokyo 169-0075")
+
+    c.save(); buffer.seek(0); return buffer
+
+# =====================================
+# 6) UI LOGIC
+# =====================================
+st.title("🌏 Odaduu Voucher Generator")
+
+if st.button("🔄 Reset"):
+    for k in list(st.session_state.keys()): del st.session_state[k]
+    st.rerun()
+
+with st.expander("📤 Upload PDF", expanded=True):
+    up_file = st.file_uploader("PDF", type="pdf")
+    if up_file and st.session_state.last_uploaded_file != up_file.name:
+        with st.spinner("Processing..."):
+            parsed = extract_pdf_data(up_file)
+            if parsed:
+                st.session_state.hotel_name = parsed.get("hotel_name", "")
+                st.session_state.city = parsed.get("city", "")
+                d_in = parse_smart_date(parsed.get("checkin_raw"))
+                if d_in: st.session_state.checkin = d_in
+                d_out = parse_smart_date(parsed.get("checkout_raw"))
+                if d_out: st.session_state.checkout = d_out
+                st.session_state.meal_plan = parsed.get("meal_plan", "Breakfast Only")
+                st.session_state.ai_room_str = clean_extracted_text(parsed.get("room_type", ""))
+                st.session_state.room_size = parsed.get("room_size", "")
+                
+                rooms = parsed.get("rooms", [])
+                if rooms:
+                    st.session_state.num_rooms = len(rooms)
+                    for i, r in enumerate(rooms):
+                        st.session_state[f"room_{i}_conf"] = str(r.get("confirmation_no", ""))
+                        st.session_state[f"room_{i}_guest"] = str(r.get("guest_name", ""))
+                        st.session_state[f"room_{i}_adults"] = int(r.get("adults", 2))
+                
+                if st.session_state.hotel_name:
+                    fetch_hotel_data_callback() 
+
+                st.session_state.last_uploaded_file = up_file.name
+                st.success("Loaded!")
+                st.rerun()
+
+c1, c2 = st.columns(2)
+with c1:
+    q = st.text_input("Search Hotel")
+    if st.button("🔎 Search"):
+        if not q:
+            st.warning("Please enter a hotel name.")
+        else:
+            with st.spinner("Searching..."):
+                found = find_hotel_options(q)
+                st.session_state.found_hotels = found
+                if not found:
+                    st.error("No results found. Try a different keyword.")
+                else:
+                    st.rerun()
+    
+    if st.session_state.found_hotels:
+        st.selectbox(
+            "Select", 
+            st.session_state.found_hotels, 
+            key="selected_hotel_key",
+            on_change=fetch_hotel_data_callback
+        )
+
+    st.text_input("Hotel", key="hotel_name")
+    st.text_input("City", key="city")
+    
+    if st.radio("Mode", ["Manual", "Bulk"]) == "Manual":
+        n = st.number_input("Rooms", 1, 50, key="num_rooms")
+        same = st.checkbox("Same Conf?", key="same_conf_check")
+        for i in range(n):
+            c_a, c_b, c_c, c_d = st.columns([3, 2, 1, 1])
+            c_a.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
+            
+            if i > 0 and same:
+                st.session_state[f"room_{i}_conf"] = st.session_state.get(f"room_{0}_conf", "")
+                c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf", disabled=True)
+            else:
+                c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf")
+                
+            c_c.number_input("Adt", 1, 10, key=f"room_{i}_adults")
+            c_d.number_input("Chd", 0, 10, key=f"room_{i}_children")
+    else:
+        f = st.file_uploader("CSV", type="csv")
+        if f: st.session_state.bulk_data = pd.read_csv(f).to_dict("records")
+
+with c2:
+    if st.session_state.checkout <= st.session_state.checkin: st.session_state.checkout = st.session_state.checkin + timedelta(days=1)
+    st.date_input("In", key="checkin"); st.date_input("Out", key="checkout")
+    
+    opts = st.session_state.fetched_room_types + ["Manual..."]
+    if st.session_state.ai_room_str: opts.insert(0, st.session_state.ai_room_str)
+    
+    s_room = st.selectbox("Room Type", opts)
+    if not st.session_state.room_final: st.session_state.room_final = s_room
+    if s_room != "Manual..." and s_room != st.session_state.room_final: st.session_state.room_final = s_room
+    
+    st.text_input("Final Room Name", key="room_final")
+    st.text_input("Room Size (e.g. 35 sqm)", key="room_size")
+    st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
+    
+    st.text_area("Remarks (Optional)", key="remarks")
+    
+    pol = "Non-Refundable"
+    if st.radio("Policy", ["Non-Ref", "Ref"], horizontal=True) == "Ref":
+        d = st.number_input("Days", 3)
+        pol = f"Free Cancel until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
+
+if st.button("Generate Voucher", type="primary"):
+    with st.spinner("Processing..."):
+        rooms = []
+        if not st.session_state.bulk_data:
+            mc = st.session_state.get("room_0_conf", "")
+            for i in range(st.session_state.num_rooms):
+                if i > 0 and st.session_state.same_conf_check:
+                    c = mc
+                else:
+                    c = st.session_state.get(f"room_{i}_conf", "")
+                    
+                rooms.append({
+                    "guest": st.session_state.get(f"room_{i}_guest", ""),
+                    "conf": c,
+                    "adults": st.session_state.get(f"room_{i}_adults", 2),
+                    "children": st.session_state.get(f"room_{i}_children", 0)
+                })
+        else:
+            for r in st.session_state.bulk_data:
+                rooms.append({
+                    "guest": str(r.get("Guest Name", "")),
+                    "conf": str(r.get("Confirmation No", "")),
+                    "adults": int(r.get("Adults", 2)),
+                    "children": int(r.get("Children", 0))
+                })
+        
+        if rooms:
+            info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
+            imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
+            
+            n_nights = (st.session_state.checkout - st.session_state.checkin).days
+            if n_nights < 1: n_nights = 1
+
+            pdf = generate_pdf_final({
+                "hotel": st.session_state.hotel_name, "checkin": st.session_state.checkin, "checkout": st.session_state.checkout,
+                "room_type": st.session_state.room_final, 
+                "meal_plan": st.session_state.meal_plan,
+                "cancellation": pol, "nights": n_nights, "room_size": st.session_state.room_size, "remarks": st.session_state.remarks
+            }, info, rooms, imgs)
+            
+            st.success("Done!")
+            st.download_button("Download", pdf, "Voucher.pdf", "application/pdf")
+        else:
+            st.error("No guest data found.")
