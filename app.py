@@ -142,14 +142,14 @@ def extract_pdf_data(pdf_file):
         return json.loads(res.replace("```json", "").replace("```", "").strip())
     except: return None
 
-# --- 5. PDF GENERATION (FIXED LAYOUT) ---
+# --- 5. PDF GENERATION (1-PAGE FIXED LAYOUT) ---
 
 def draw_vector_seal(c, x, y):
-    """Draws the Odaduu Seal with 'ODADUU' on top arc and 'OFFICIAL' at bottom."""
+    """Draws Odaduu Seal - Double Circle with Text."""
     c.saveState()
     c.setStrokeColor(BRAND_BLUE); c.setFillColor(BRAND_BLUE); c.setFillAlpha(0.8); c.setLineWidth(1.5)
     
-    # Circles
+    # Concentric Circles
     cx, cy = x + 40, y + 40
     c.circle(cx, cy, 40, stroke=1, fill=0)
     c.setLineWidth(0.5); c.circle(cx, cy, 36, stroke=1, fill=0)
@@ -161,22 +161,21 @@ def draw_vector_seal(c, x, y):
     # Arched Text
     c.setFont("Helvetica-Bold", 6)
     
-    # Top Arc: "CERTIFIED VOUCHER"
+    # "CERTIFIED VOUCHER" (Top)
     text_top = "CERTIFIED VOUCHER"
     angle_start = 140
     for i, char in enumerate(text_top):
-        angle = angle_start - (i * 10) # spacing
+        angle = angle_start - (i * 10)
         rad = radians(angle)
-        # Position relative to center radius 32
         tx = cx + 32 * cos(rad)
         ty = cy + 32 * sin(rad)
         c.saveState()
         c.translate(tx, ty)
-        c.rotate(angle - 90) # Rotate text to face inward
+        c.rotate(angle - 90)
         c.drawCentredString(0, 0, char)
         c.restoreState()
 
-    # Bottom Arc: "OFFICIAL"
+    # "OFFICIAL" (Bottom)
     text_bot = "OFFICIAL"
     angle_start = 240
     for i, char in enumerate(text_bot):
@@ -208,168 +207,131 @@ def generate_pdf(data, info, imgs, rooms_list):
     for i, room in enumerate(rooms_list):
         if i > 0: c.showPage() 
         
-        y = h - 50
+        y = h - 40 # Top margin
         
-        # --- HEADER ---
-        try: c.drawImage(LOGO_FILE, left_margin, y-40, 120, 40, mask='auto', preserveAspectRatio=True)
-        except: 
-            c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 20); c.drawString(left_margin, y-20, COMPANY_NAME)
+        # 1. IMAGES (Top Row - Compact)
+        # Using 3 images side-by-side, height limited to 85pts to save space
+        img_h = 85
+        img_w = 165
+        ix = left_margin
+        valid_imgs = [x for x in [i_ext, i_lobby, i_room] if x]
         
-        y -= 60
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
-        c.drawCentredString(w/2, y, "HOTEL CONFIRMATION VOUCHER")
-        y -= 30
+        if valid_imgs:
+            for img in valid_imgs[:3]:
+                try: c.drawImage(img, ix, y - img_h, img_w, img_h); ix += (img_w + 10)
+                except: pass
+            y -= (img_h + 20)
+        else:
+            y -= 20 # Small spacer if no images
 
-        # --- GUEST INFO ---
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, y, "Guest Information")
-        y -= 5; c.setStrokeColor(lightgrey); c.line(left_margin, y, right_margin, y); y -= 15
+        # 2. LOGO & TITLE
+        # Logo on left, Title on Right
+        logo_h = 35
+        try: c.drawImage(LOGO_FILE, left_margin, y - logo_h, 100, logo_h, mask='auto', preserveAspectRatio=True)
+        except: 
+            c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 18); c.drawString(left_margin, y-25, COMPANY_NAME)
         
-        # Grid for Guest Info
-        g_data = [
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
+        c.drawRightString(right_margin, y - 25, "HOTEL CONFIRMATION VOUCHER")
+        y -= (logo_h + 25)
+
+        # Helper for tables
+        def draw_data_table(title, data_list):
+            nonlocal y
+            c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, y, title)
+            y -= 4
+            c.setStrokeColor(lightgrey); c.line(left_margin, y, right_margin, y)
+            y -= 12
+            
+            t = Table(data_list, colWidths=[110, 390])
+            t.setStyle(TableStyle([
+                ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
+                ('FONTNAME', (1,0), (1,-1), 'Helvetica'),
+                ('FONTSIZE', (0,0), (-1,-1), 9),
+                ('TEXTCOLOR', (0,0), (-1,-1), Color(0.2,0.2,0.2)),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('LEFTPADDING', (0,0), (-1,-1), 0),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ]))
+            tw, th = t.wrapOn(c, content_width, 200)
+            t.drawOn(c, left_margin, y - th)
+            y -= (th + 10) # Compact gap
+
+        # 3. GUEST INFO
+        draw_data_table("Guest Information", [
             ["Guest Name(s):", room['guest']],
             ["Confirmation No:", room['conf']],
             ["Booking Date:", datetime.now().strftime("%d %b %Y")]
-        ]
-        g_table = Table(g_data, colWidths=[120, 380])
-        g_table.setStyle(TableStyle([
-            ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-            ('FONTNAME', (1,0), (1,-1), 'Helvetica'),
-            ('FONTSIZE', (0,0), (-1,-1), 10),
-            ('TEXTCOLOR', (0,0), (-1,-1), Color(0.2,0.2,0.2)),
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-        ]))
-        g_w, g_h = g_table.wrapOn(c, content_width, 200)
-        g_table.drawOn(c, left_margin, y - g_h)
-        y -= (g_h + 15)
+        ])
 
-        # --- HOTEL DETAILS ---
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, y, "Hotel Details")
-        y -= 5; c.line(left_margin, y, right_margin, y); y -= 15
-        
-        h_data = [
+        # 4. HOTEL DETAILS
+        draw_data_table("Hotel Details", [
             ["Hotel:", data['hotel']],
             ["Address:", info.get('addr1', '')],
             ["Check-In:", data['in'].strftime("%d %b %Y")],
             ["Check-Out:", data['out'].strftime("%d %b %Y")]
-        ]
-        h_table = Table(h_data, colWidths=[120, 380])
-        h_table.setStyle(TableStyle([
-            ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-            ('FONTNAME', (1,0), (1,-1), 'Helvetica'),
-            ('FONTSIZE', (0,0), (-1,-1), 10),
-            ('TEXTCOLOR', (0,0), (-1,-1), Color(0.2,0.2,0.2)),
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-        ]))
-        h_w, h_h = h_table.wrapOn(c, content_width, 200)
-        h_table.drawOn(c, left_margin, y - h_h)
-        y -= (h_h + 15)
+        ])
 
-        # --- ROOM INFO ---
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 12); c.drawString(left_margin, y, "Room Information")
-        y -= 5; c.line(left_margin, y, right_margin, y); y -= 15
-        
-        r_data = [
+        # 5. ROOM INFO
+        draw_data_table("Room Information", [
             ["Room Type:", data['room_type']],
             ["Pax:", f"{data['adults']} Adults"],
             ["Meal Plan:", data['meal']],
             ["Cancellation:", data['policy']]
-        ]
-        r_table = Table(r_data, colWidths=[120, 380])
-        r_table.setStyle(TableStyle([
-            ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-            ('FONTNAME', (1,0), (1,-1), 'Helvetica'),
-            ('FONTSIZE', (0,0), (-1,-1), 10),
-            ('TEXTCOLOR', (0,0), (-1,-1), Color(0.2,0.2,0.2)),
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-        ]))
-        r_w, r_h = r_table.wrapOn(c, content_width, 200)
-        r_table.drawOn(c, left_margin, y - r_h)
-        y -= (r_h + 15)
+        ])
 
-        # --- IMAGES (3 GRID) ---
-        # Calculate dynamic position to avoid overlap
-        img_y = y - 100 
-        
-        if i_ext or i_lobby or i_room:
-            # Draw placeholder rects if image fails, to keep layout
-            valid_imgs = [i_ext, i_lobby, i_room]
-            ix = left_margin
-            img_width = 160
-            img_height = 95
-            
-            for img in valid_imgs:
-                if img:
-                    try: c.drawImage(img, ix, img_y, img_width, img_height)
-                    except: pass
-                ix += (img_width + 10) # gap
-            y = img_y - 15 # Update Y position below images
-        else:
-            y -= 10 # small gap if no images
-
-        # --- POLICY TABLE ---
-        # Ensure we have space, else new page
-        if y < 200: 
-            c.showPage(); y = h - 50
-        
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, y, "HOTEL POLICIES")
-        y -= 15
+        # 6. POLICY TABLE (Grid Style)
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y, "HOTEL POLICIES")
+        y -= 12
         
         pol_data = [
             ["Policy", "Time / Detail"],
-            ["Standard Check-in:", "3:00 PM"],
-            ["Standard Check-out:", "12:00 PM"],
-            ["Early/Late:", "Subject to availability. Request upon arrival."],
-            ["Required:", "Passport & Credit Card/Cash Deposit."]
+            ["Check-in / Out:", "Check-in: 3:00 PM  |  Check-out: 12:00 PM"],
+            ["Early/Late:", "Subject to availability. Request at hotel."],
+            ["Requirement:", "Passport & Credit Card/Cash Deposit required."]
         ]
-        pol_table = Table(pol_data, colWidths=[120, 390])
+        pol_table = Table(pol_data, colWidths=[110, 390])
         pol_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), BRAND_BLUE),
             ('TEXTCOLOR', (0,0), (-1,0), white),
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
-            ('FONTSIZE', (0,0), (-1,-1), 9),
-            ('GRID', (0,0), (-1,-1), 0.5, Color(0.2, 0.2, 0.2)),
-            ('PADDING', (0,0), (-1,-1), 4),
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('GRID', (0,0), (-1,-1), 0.5, Color(0.3, 0.3, 0.3)),
+            ('PADDING', (0,0), (-1,-1), 3),
         ]))
-        pol_w, pol_h = pol_table.wrapOn(c, content_width, 200)
-        pol_table.drawOn(c, left_margin, y - pol_h)
-        y -= (pol_h + 20)
+        pw, ph = pol_table.wrapOn(c, content_width, 150)
+        pol_table.drawOn(c, left_margin, y - ph)
+        y -= (ph + 15)
 
-        # --- T&C SECTION ---
-        if y < 150:
-            c.showPage(); y = h - 50
-            
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y, "STANDARD TERMS & CONDITIONS")
-        y -= 12
+        # 7. TERMS & CONDITIONS (Compact Font to Fit)
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 9); c.drawString(left_margin, y, "TERMS & CONDITIONS")
+        y -= 10
         
         tnc_text = [
-            "1. Voucher Validity: Must be presented at hotel front desk.",
-            f"2. Identification: {room['guest']} must present valid ID.",
-            "3. No-Show: Full charge applies for no-shows.",
-            "4. Incidentals: Extras (mini-bar, etc.) paid by guest directly.",
+            "1. Validity: Voucher must be presented at check-in.",
+            f"2. ID Proof: Lead guest {room['guest']} must provide valid ID.",
+            "3. No-Show: 100% charge applies for no-shows.",
+            "4. Extras: Incidentals (mini-bar/laundry) are paid directly.",
             "5. Occupancy: Standard occupancy rules apply.",
-            "6. Hotel Rights: Hotel may refuse entry for policy violations.",
-            "7. Liability: Valuables should be stored in safety deposit box.",
-            "8. Non-Transferable: Booking cannot be resold.",
-            "9. City Tax: Not included, paid at hotel if applicable.",
-            "10. Bed Type: Subject to availability."
+            "6. Rights: Hotel reserves right of admission.",
+            "7. Liability: Use safety deposit box for valuables.",
+            "8. Resale: Booking is non-transferable/non-resaleable.",
+            "9. Tax: City/Tourism tax payable at hotel if applicable.",
+            "10. Bedding: Bed type subject to availability."
         ]
-        styleN = getSampleStyleSheet()['Normal']
-        styleN.fontSize = 8
-        styleN.leading = 10
         
+        # Draw T&C as simple text lines to save space
+        c.setFillColor(black); c.setFont("Helvetica", 7)
         for line in tnc_text:
-            p = Paragraph(line, styleN)
-            p_w, p_h = p.wrap(content_width, 50)
-            p.drawOn(c, left_margin, y - p_h)
-            y -= (p_h + 2)
-
-        # --- FOOTER & SEAL ---
+            c.drawString(left_margin, y, line)
+            y -= 9 # Tight leading
+            
+        # 8. FOOTER SEAL (Absolute Position Bottom Right)
         draw_vector_seal(c, w - 130, 45)
-        c.setStrokeColor(BRAND_GOLD); c.setLineWidth(3); c.line(0, 45, w, 45)
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 9); c.drawString(left_margin, 30, f"Issued by: {COMPANY_NAME}")
+        
+        # Footer Line
+        c.setStrokeColor(BRAND_GOLD); c.setLineWidth(2); c.line(0, 40, w, 40)
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 8); c.drawString(left_margin, 25, f"Issued by: {COMPANY_NAME}")
         
     c.save(); buffer.seek(0); return buffer
 
@@ -377,7 +339,6 @@ def generate_pdf(data, info, imgs, rooms_list):
 
 st.title("🌏 Odaduu Voucher Generator")
 
-# Reset
 if st.button("🔄 Reset App"):
     for k in list(st.session_state.keys()): del st.session_state[k]
     st.rerun()
@@ -431,7 +392,6 @@ with c1:
     
     if st.session_state.found_hotels:
         selected_hotel = st.selectbox("Select Correct Hotel", st.session_state.found_hotels, key="hotel_selector")
-        # Trigger update on selection change
         if selected_hotel != st.session_state.hotel_name:
             st.session_state.hotel_name = selected_hotel
             with st.spinner(f"Loading data for {selected_hotel}..."):
@@ -487,14 +447,14 @@ with c2:
     opts.append("Manual Entry...")
     
     sel = st.selectbox("Room Type Options", opts)
-    final_room = st.text_input("Final Room Name (Editable)", value="" if sel == "Manual Entry..." else sel)
+    final_room = st.text_input("Room Type Name", value="" if sel == "Manual Entry..." else sel)
     
     st.number_input("Adults", 1, key="adults")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
     ptype = st.radio("Policy", ["Non-Refundable", "Refundable"], horizontal=True)
     if ptype == "Refundable":
-        d = st.number_input("Free Cancel Days Before", 3)
+        d = st.number_input("Free Cancel Days", 3)
         policy_txt = f"Free Cancellation until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
     else:
         policy_txt = "Non-Refundable & Non-Amendable"
@@ -533,4 +493,4 @@ if st.button("Generate Vouchers", type="primary"):
             pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_to_process)
             
             st.success(f"Generated {len(rooms_to_process)} Vouchers!")
-            st.download_button("⬇️ Download All Vouchers (PDF)", pdf_bytes, "Vouchers.pdf", "application/pdf")
+            st.download_button("⬇️ Download PDF", pdf_bytes, "Vouchers.pdf", "application/pdf")
