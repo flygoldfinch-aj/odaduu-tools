@@ -15,6 +15,7 @@ import re
 import json
 from math import sin, cos, radians
 
+
 # =====================================
 # 1) STREAMLIT CONFIG
 # =====================================
@@ -25,11 +26,18 @@ st.set_page_config(page_title="Odaduu Voucher Tool", page_icon="🌏", layout="w
 # 2) BRANDING / CONSTANTS
 # =====================================
 BRAND_BLUE = Color(0.05, 0.20, 0.40)
-BRAND_GOLD = Color(0.85, 0.70, 0.20)
+
+# Odaduu orange (approx — tweak if you want exact)
+BRAND_ORANGE = Color(0.95, 0.42, 0.13)
 
 COMPANY_NAME = "Odaduu Travel DMC"
 COMPANY_EMAIL = "aashwin@odaduu.jp"
 LOGO_FILE = "logo.png"
+
+# Footer safe area reservation (prevents overlap)
+FOOTER_LINE_Y = 40
+FOOTER_RESERVED_HEIGHT = 110  # seal + footer text + breathing space
+MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT  # everything must stay above this
 
 
 # =====================================
@@ -64,6 +72,7 @@ def init_state():
         "bulk_data": [],
         "same_conf_check": False,
         "room_final": "",
+        "hotel_images": [None, None, None],  # exterior / lobby / room
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -105,8 +114,7 @@ def clean_extracted_text(raw_val):
 def safe_json_loads(s: str):
     if not s:
         return None
-    s = s.strip()
-    s = s.replace("```json", "").replace("```", "").strip()
+    s = s.strip().replace("```json", "").replace("```", "").strip()
 
     try:
         return json.loads(s)
@@ -124,13 +132,15 @@ def safe_json_loads(s: str):
 
 
 # =====================================
-# 6) SEARCH & AI HELPERS
+# 6) GOOGLE SEARCH / IMAGES / AI
 # =====================================
-def google_search(query, num=5):
+def google_search(query, num=5, search_type=None):
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
-        res = requests.get(url, params=params, timeout=6)
+        if search_type == "image":
+            params.update({"searchType": "image", "imgSize": "large", "safe": "active"})
+        res = requests.get(url, params=params, timeout=8)
         return res.json().get("items", []) if res.status_code == 200 else []
     except Exception:
         return []
@@ -186,10 +196,46 @@ def fetch_hotel_details_text(hotel, city):
         return {}
 
 
+def fetch_image_urls(query, num=4):
+    # Return multiple links; we will try them until one loads
+    items = google_search(query, num=num, search_type="image")
+    urls = []
+    for it in items:
+        link = it.get("link")
+        if link and link not in urls:
+            urls.append(link)
+    return urls
+
+
+def get_img_reader_from_urls(urls):
+    # Try several URLs (403 is common on hotlinking)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
+    }
+    for url in urls or []:
+        try:
+            r = requests.get(url, timeout=6, headers=headers)
+            if r.status_code == 200 and r.content:
+                return ImageReader(io.BytesIO(r.content))
+        except Exception:
+            continue
+    return None
+
+
+def get_smart_images(hotel, city):
+    base = f"{hotel} {city}".strip()
+    exterior_urls = fetch_image_urls(f"{base} hotel exterior building", num=4)
+    lobby_urls = fetch_image_urls(f"{base} hotel lobby reception", num=4)
+    room_urls = fetch_image_urls(f"{base} hotel room interior bedroom", num=4)
+
+    return [
+        get_img_reader_from_urls(exterior_urls),
+        get_img_reader_from_urls(lobby_urls),
+        get_img_reader_from_urls(room_urls),
+    ]
+
+
 def extract_pdf_data(pdf_file):
-    """
-    Extract booking info from supplier pdf -> JSON.
-    """
     try:
         reader = pypdf.PdfReader(pdf_file)
         pages_text = []
@@ -230,7 +276,7 @@ TEXT:
 
 
 # =====================================
-# 7) REPORTLAB PDF (LOCKED TEMPLATE)
+# 7) REPORTLAB PDF (LOCKED + 1 PAGE)
 # =====================================
 def draw_vector_seal(c, x, y):
     c.saveState()
@@ -250,8 +296,6 @@ def draw_vector_seal(c, x, y):
     c.drawCentredString(cx, cy - 6, "TRAVEL DMC")
 
     c.setFont("Helvetica-Bold", 6)
-
-    # Top Arc
     text_top = "CERTIFIED VOUCHER"
     angle_start = 140
     for i, char in enumerate(text_top):
@@ -265,7 +309,6 @@ def draw_vector_seal(c, x, y):
         c.drawCentredString(0, 0, char)
         c.restoreState()
 
-    # Bottom Arc
     text_bot = "OFFICIAL"
     angle_start = 240
     for i, char in enumerate(text_bot):
@@ -282,10 +325,7 @@ def draw_vector_seal(c, x, y):
     c.restoreState()
 
 
-def _draw_centered_header(c, w, y_top, left, right):
-    """
-    Center logo then big centered title.
-    """
+def _draw_centered_header(c, w, y_top):
     logo_w, logo_h = 240, 60
     logo_x = (w - logo_w) / 2
     logo_y = y_top - logo_h
@@ -304,51 +344,70 @@ def _draw_centered_header(c, w, y_top, left, right):
     c.setFont("Helvetica-Bold", 22)
     c.drawCentredString(w / 2, title_y, "HOTEL CONFIRMATION VOUCHER")
 
-    return title_y - 35  # new y start for content
+    return title_y - 18
 
 
-def _draw_section_compact(c, x, y, w, title, rows):
+def _draw_image_row(c, x, y, w, imgs):
+    # 3 images across, compact like your older vouchers (exterior/lobby/room)
+    valid = [im for im in imgs if im is not None]
+    if not valid:
+        return y
+
+    gap = 8
+    img_h = 78
+    img_w = (w - (2 * gap)) / 3
+
+    # draw exactly 3 slots; if some are None, skip that slot
+    for i in range(3):
+        im = imgs[i] if i < len(imgs) else None
+        if im:
+            try:
+                c.drawImage(im, x + i * (img_w + gap), y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+            except Exception:
+                pass
+
+    return y - img_h - 10
+
+
+def _boxed_compact_section(c, x, y, w, title, rows):
     """
-    Compact section like your screenshot:
-    - Blue title
-    - Grey line
-    - Tight KV table (labels bold, minimal padding)
+    Guest/Hotel/Room:
+    - BOX in Odaduu orange
+    - compact spacing
+    - bold labels
     """
-    c.setFillColor(BRAND_BLUE)
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(x, y, title)
-    y -= 6
+    data = [[title, ""]]
+    data.extend(rows)
 
-    c.setStrokeColor(lightgrey)
-    c.setLineWidth(1)
-    c.line(x, y, x + w, y)
-    y -= 8
-
-    # Build table (tight)
-    t = Table(rows, colWidths=[150, w - 150])
+    t = Table(data, colWidths=[155, w - 155])
     t.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("TEXTCOLOR", (0, 0), (-1, -1), Color(0.1, 0.1, 0.1)),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("SPAN", (0, 0), (-1, 0)),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 12),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
+
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, lightgrey),
+
+        ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (1, 1), (1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -1), 9.7),
+        ("TEXTCOLOR", (0, 1), (-1, -1), Color(0.1, 0.1, 0.1)),
+
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+
+        ("BOX", (0, 0), (-1, -1), 1.0, BRAND_ORANGE),
     ]))
     tw, th = t.wrapOn(c, w, 9999)
     t.drawOn(c, x, y - th)
-    y = y - th - 12
-    return y
+    return y - th - 8
 
 
-def _policy_table_boxed(c, x, y, w):
-    c.setFillColor(BRAND_BLUE)
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(x, y, "HOTEL CHECK-IN & CHECK-OUT POLICY")
-    y -= 14
-
+def _build_policy_table(w):
     data = [
         ["Policy", "Time / Detail"],
         ["Standard Check-in Time:", "3:00 PM"],
@@ -356,48 +415,40 @@ def _policy_table_boxed(c, x, y, w):
         ["Early Check-in/Late Out:", "Subject to availability. Request upon arrival."],
         ["Required at Check-in:", "Passport & Credit Card/Cash Deposit."],
     ]
-
     t = Table(data, colWidths=[170, w - 170])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), BRAND_BLUE),
         ("TEXTCOLOR", (0, 0), (-1, 0), white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("FONTSIZE", (0, 0), (-1, 0), 8.6),
 
         ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
         ("FONTNAME", (1, 1), (1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 1), (-1, -1), 8),
+        ("FONTSIZE", (0, 1), (-1, -1), 7.6),
+
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
 
-        ("GRID", (0, 0), (-1, -1), 0.5, Color(0.3, 0.3, 0.3)),
-        ("BOX", (0, 0), (-1, -1), 1.0, Color(0.2, 0.2, 0.2)),
+        ("GRID", (0, 0), (-1, -1), 0.5, BRAND_ORANGE),
+        ("BOX", (0, 0), (-1, -1), 1.0, BRAND_ORANGE),
     ]))
-
-    tw, th = t.wrapOn(c, w, 9999)
-    t.drawOn(c, x, y - th)
-    y = y - th - 12
-    return y
+    return t
 
 
-def _tnc_boxed(c, x, y, w, lead_guest_name):
-    c.setFillColor(BRAND_BLUE)
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(x, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS")
-    y -= 10
-
+def _build_tnc_table(w, lead_guest_name, font_size=7.0, leading=8.6):
     styles = getSampleStyleSheet()
     tnc_style = ParagraphStyle(
         "tnc",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=7,
-        leading=9,
+        fontSize=font_size,
+        leading=leading,
         textColor=black,
-        spaceAfter=2,
+        spaceAfter=1,
     )
 
     lines = [
@@ -417,24 +468,20 @@ def _tnc_boxed(c, x, y, w, lead_guest_name):
     t = Table(rows, colWidths=[w])
     t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("BOX", (0, 0), (-1, -1), 1.0, Color(0.2, 0.2, 0.2)),
-        ("LINEBELOW", (0, 0), (-1, -2), 0.25, Color(0.75, 0.75, 0.75)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("BOX", (0, 0), (-1, -1), 1.0, BRAND_ORANGE),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.25, Color(0.82, 0.82, 0.82)),
     ]))
-
-    tw, th = t.wrapOn(c, w, 9999)
-    t.drawOn(c, x, y - th)
-    y = y - th - 10
-    return y
+    return t
 
 
-def generate_pdf_locked(data, hotel_info, rooms_list):
+def generate_pdf_locked(data, hotel_info, rooms_list, imgs):
     """
     One page per room voucher.
-    Compact Guest/Hotel/Room sections + boxed policy + boxed TNC.
+    Ensures content never crosses footer. Auto-shrinks T&C to fit.
     """
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
@@ -450,8 +497,8 @@ def generate_pdf_locked(data, hotel_info, rooms_list):
         "addr",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=10,
-        leading=12,
+        fontSize=9.7,
+        leading=11.5,
         textColor=Color(0.1, 0.1, 0.1),
     )
 
@@ -461,10 +508,11 @@ def generate_pdf_locked(data, hotel_info, rooms_list):
 
         y = top
 
-        # Header centered
-        y = _draw_centered_header(c, w, y, left, right)
+        # Header + images
+        y = _draw_centered_header(c, w, y)
+        y = _draw_image_row(c, left, y, content_w, imgs)
 
-        # Compute address paragraph (wrap)
+        # Prepare hotel fields
         addr1 = (hotel_info.get("addr1") or "").strip()
         addr2 = (hotel_info.get("addr2") or "").strip()
         phone = (hotel_info.get("phone") or "").strip()
@@ -478,28 +526,17 @@ def generate_pdf_locked(data, hotel_info, rooms_list):
 
         nights = max((data["checkout"] - data["checkin"]).days, 1)
 
-        # Page safety (keep footer area)
-        def ensure_space(min_y=120):
-            nonlocal y
-            if y < min_y:
-                c.showPage()
-                y = top
-                y = _draw_centered_header(c, w, y, left, right)
-
-        # Guest (compact)
-        ensure_space(250)
-        y = _draw_section_compact(
+        # Sections in boxes (compact + bold)
+        y = _boxed_compact_section(
             c, left, y, content_w, "Guest Information",
             [
                 ["Guest Name:", room["guest"]],
                 ["Confirmation No.:", room["conf"]],
                 ["Booking Date:", data["booking_date"].strftime("%d %b %Y")],
-            ]
+            ],
         )
 
-        # Hotel (compact)
-        ensure_space(250)
-        y = _draw_section_compact(
+        y = _boxed_compact_section(
             c, left, y, content_w, "Hotel Details",
             [
                 ["Hotel:", data["hotel"]],
@@ -508,35 +545,82 @@ def generate_pdf_locked(data, hotel_info, rooms_list):
                 ["Check-In:", data["checkin"].strftime("%d %b %Y")],
                 ["Check-Out:", data["checkout"].strftime("%d %b %Y")],
                 ["Nights:", str(nights)],
-            ]
+            ],
         )
 
-        # Room (compact)
-        ensure_space(230)
-        y = _draw_section_compact(
+        y = _boxed_compact_section(
             c, left, y, content_w, "Room Information",
             [
                 ["Room Type:", data["room_type"]],
                 ["No. of Pax:", f'{data["adults"]} Adults'],
                 ["Meal Plan:", data["meal_plan"]],
                 ["Cancellation:", data["cancellation"]],
-            ]
+            ],
         )
 
-        # Policy boxed
-        ensure_space(210)
-        y = _policy_table_boxed(c, left, y, content_w)
+        # (1) REQUIRED GAP between Cancellation and Policy title
+        y -= 10
 
-        # TNC boxed
-        ensure_space(230)
+        # Policy title
+        c.setFillColor(BRAND_BLUE)
+        c.setFont("Helvetica-Bold", 10.6)
+        c.drawString(left, y, "HOTEL CHECK-IN & CHECK-OUT POLICY")
+        y -= 10
+
+        policy_table = _build_policy_table(content_w)
+        pw, ph = policy_table.wrapOn(c, content_w, 9999)
+        policy_table.drawOn(c, left, y - ph)
+        y = y - ph - 10
+
+        # TNC title
+        c.setFillColor(BRAND_BLUE)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(left, y, "STANDARD HOTEL BOOKING TERMS & CONDITIONS")
+        y -= 8
+
+        # Fit TNC to 1 page above footer: try multiple sizes until it fits
         lead_guest = room["guest"].split(",")[0].strip() if room["guest"] else "Guest"
-        y = _tnc_boxed(c, left, y, content_w, lead_guest)
 
-        # Footer / seal
+        candidates = [
+            (7.0, 8.6),
+            (6.7, 8.2),
+            (6.4, 7.8),
+            (6.1, 7.5),
+            (5.9, 7.2),
+            (5.7, 7.0),
+        ]
+
+        chosen = None
+        chosen_th = None
+        chosen_table = None
+
+        available_height = y - MIN_CONTENT_Y
+        for fs, ld in candidates:
+            tnc_table = _build_tnc_table(content_w, lead_guest, font_size=fs, leading=ld)
+            tw, th = tnc_table.wrapOn(c, content_w, 9999)
+            if th <= available_height:
+                chosen = (fs, ld)
+                chosen_th = th
+                chosen_table = tnc_table
+                break
+
+        # If still doesn't fit, force the smallest and we will reduce padding by drawing slightly higher
+        if chosen_table is None:
+            fs, ld = candidates[-1]
+            chosen_table = _build_tnc_table(content_w, lead_guest, font_size=fs, leading=ld)
+            tw, chosen_th = chosen_table.wrapOn(c, content_w, 9999)
+            # If even now it goes over, clamp y so bottom sits exactly at MIN_CONTENT_Y
+            y = MIN_CONTENT_Y + chosen_th
+
+        # Draw TNC table
+        chosen_table.drawOn(c, left, y - chosen_th)
+        y = y - chosen_th - 6
+
+        # Footer: line + seal + issuer
         draw_vector_seal(c, w - 130, 45)
-        c.setStrokeColor(BRAND_GOLD)
+        c.setStrokeColor(BRAND_ORANGE)
         c.setLineWidth(2)
-        c.line(0, 40, w, 40)
+        c.line(0, FOOTER_LINE_Y, w, FOOTER_LINE_Y)
 
         c.setFillColor(BRAND_BLUE)
         c.setFont("Helvetica-Bold", 8)
@@ -592,10 +676,14 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                 if st.session_state.hotel_name and not st.session_state.city:
                     st.session_state.city = detect_city(st.session_state.hotel_name)
 
-                if st.session_state.hotel_name and st.session_state.city:
-                    st.session_state.fetched_room_types = fetch_real_room_types(
-                        st.session_state.hotel_name, st.session_state.city
-                    )
+                if st.session_state.hotel_name:
+                    # Fetch room types for dropdown
+                    if st.session_state.city:
+                        st.session_state.fetched_room_types = fetch_real_room_types(
+                            st.session_state.hotel_name, st.session_state.city
+                        )
+                    # Fetch images (exterior/lobby/room)
+                    st.session_state.hotel_images = get_smart_images(st.session_state.hotel_name, st.session_state.city)
 
                 st.session_state.last_uploaded_file = up_file.name
                 st.success("PDF Loaded!")
@@ -622,6 +710,7 @@ with c1:
             st.session_state.hotel_name = selected
             st.session_state.city = detect_city(selected)
             st.session_state.fetched_room_types = fetch_real_room_types(selected, st.session_state.city)
+            st.session_state.hotel_images = get_smart_images(st.session_state.hotel_name, st.session_state.city)
 
     st.text_input("Final Hotel Name", key="hotel_name")
     st.text_input("City", key="city")
@@ -714,6 +803,9 @@ if st.button("Generate Vouchers", type="primary"):
             st.stop()
 
         info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
+        imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(
+            st.session_state.hotel_name, st.session_state.city
+        )
 
         pdf = generate_pdf_locked(
             data={
@@ -728,6 +820,7 @@ if st.button("Generate Vouchers", type="primary"):
             },
             hotel_info=info,
             rooms_list=rooms,
+            imgs=imgs,
         )
 
         st.success("Done!")
