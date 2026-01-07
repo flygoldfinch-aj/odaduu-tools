@@ -314,14 +314,15 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # GAP = 0.75 as requested
+    # GAP = 0.75
     gap = 0.75 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     img_h = 100 * scale_factor # Standard height
     
     for i in range(min(3, len(valid))):
         im = valid[i]
-        try: c.drawImage(im, x + i * (img_w + gap), y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+        curr_x = x + (i * (img_w + gap))
+        try: c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
         except: pass
         
     return y - img_h - (10 * scale_factor)
@@ -544,6 +545,7 @@ with c1:
             c_a.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
             
             if i > 0 and same:
+                # Force update session state
                 st.session_state[f"room_{i}_conf"] = st.session_state.get(f"room_{0}_conf", "")
                 c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf", disabled=True)
             else:
@@ -596,11 +598,24 @@ if st.button("Generate Voucher", type="primary"):
                 })
         else:
             for r in st.session_state.bulk_data:
+                # --- FIXED CSV PARSING ---
+                g_name = str(r.get("Guest Name") or r.get("Guests") or r.get("Guest") or "")
+                c_no = str(r.get("Confirmation No") or r.get("Confirmation") or r.get("Conf") or r.get("Room_No") or r.get("Room") or "")
+                
+                # Auto-calculate adults if missing
+                if "Adults" in r and r["Adults"]:
+                    adt = int(r["Adults"])
+                else:
+                    # Fallback: Count commas + 1
+                    adt = len(g_name.split(',')) if g_name else 2
+                
+                chd = int(r.get("Children", 0))
+
                 rooms.append({
-                    "guest": str(r.get("Guest Name", "")),
-                    "conf": str(r.get("Confirmation No", "")),
-                    "adults": int(r.get("Adults", 2)),
-                    "children": int(r.get("Children", 0))
+                    "guest": g_name,
+                    "conf": c_no,
+                    "adults": adt,
+                    "children": chd
                 })
         
         if rooms:
