@@ -28,6 +28,7 @@ LOGO_FILE = "logo.png"
 
 FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
+# We allow drawing a bit lower if needed to squeeze into one page
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT 
 
 try:
@@ -47,7 +48,7 @@ def init_state():
         'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
-        'num_rooms': 1, 'room_type': '', 
+        'num_rooms': 1, 'room_type': '', 'adults': 2, 
         'meal_plan': 'Breakfast Only',
         'policy_type': 'Non-Refundable', 
         'fetched_room_types': [], 'ai_room_str': '',
@@ -60,8 +61,6 @@ def init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-            
-    # Initialize dynamic room keys (Guest, Conf, Adults, Children)
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
@@ -306,17 +305,21 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # 0.1 point gap (virtually seamless)
-    gap = 0.1 * scale_factor 
+    # 0.25 point gap as requested
+    gap = 0.25 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     
     # Standard height 100
     img_h = 100 * scale_factor 
     
+    total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
+    ix = x + (w - total_w) / 2
+    
     for i in range(min(3, len(valid))):
         im = valid[i]
-        try: c.drawImage(im, x + i * (img_w + gap), y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+        try: c.drawImage(im, ix, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
         except: pass
+        ix += (img_w + gap)
     return y - img_h - (10 * scale_factor)
 
 def _build_policy_table(w):
@@ -395,7 +398,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Remarks:", remarks_p]
         ]
         
-        # Hotel Info
+        # Hotel Info (Removed Voucher Date)
         addr_str = f"{hotel_info.get('addr1','')}\n{hotel_info.get('addr2','')}".strip()
         addr_para = Paragraph(addr_str.replace('\n', '<br/>'), addr_style)
         hotel_name_p = Paragraph(data["hotel"], addr_style)
@@ -438,13 +441,15 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
         if y - ph < MIN_CONTENT_Y: 
+            # Force shrink TNC if Policy fits but barely
             tnc_font = 5.5 
         pt.drawOn(c, left, y - ph); y -= (ph + 12)
         
-        # 5. TNC
+        # 5. TNC (Auto-Fit)
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
         lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
         
+        # Force fit TNC if space is tight but exists
         if y - MIN_CONTENT_Y < 120: tnc_font = 5
             
         tnc = _build_tnc_table(content_w, lead_guest, tnc_font)
@@ -527,13 +532,17 @@ with c1:
     
     if st.radio("Mode", ["Manual", "Bulk"]) == "Manual":
         n = st.number_input("Rooms", 1, 50, key="num_rooms")
+        
+        # --- FIXED "SAME CONF" LOGIC ---
         same = st.checkbox("Same Conf?", key="same_conf_check")
+        
         for i in range(n):
             c_a, c_b, c_c, c_d = st.columns([3, 2, 1, 1])
             c_a.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
             
             # Logic: If Room > 0 AND 'same' is checked, disable input and copy Room 0 value
             if i > 0 and same:
+                # Force update session state to match room 0
                 st.session_state[f"room_{i}_conf"] = st.session_state.get(f"room_{0}_conf", "")
                 c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf", disabled=True)
             else:
@@ -558,6 +567,7 @@ with c2:
     
     st.text_input("Final Room Name", key="room_final")
     st.text_input("Room Size (e.g. 35 sqm)", key="room_size")
+    # Adults input removed here as it is now per room
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
     st.text_area("Remarks (Optional)", key="remarks")
@@ -573,6 +583,7 @@ if st.button("Generate Voucher", type="primary"):
         if not st.session_state.bulk_data:
             mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
+                # Ensure we pick up the 'frozen' value if same_conf is active
                 if i > 0 and st.session_state.same_conf_check:
                     c = mc
                 else:
@@ -585,6 +596,7 @@ if st.button("Generate Voucher", type="primary"):
                     "children": st.session_state.get(f"room_{i}_children", 0)
                 })
         else:
+            # Fallback for Bulk: assumes standard 2 adults if not specified in CSV
             for r in st.session_state.bulk_data:
                 rooms.append({
                     "guest": str(r.get("Guest Name", "")),
@@ -597,6 +609,7 @@ if st.button("Generate Voucher", type="primary"):
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
             imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
             
+            # Calculate Nights
             n_nights = (st.session_state.checkout - st.session_state.checkin).days
             if n_nights < 1: n_nights = 1
 
