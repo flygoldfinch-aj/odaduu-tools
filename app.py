@@ -30,13 +30,18 @@ FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT 
 
+# Initialize Secrets variables to None to prevent NameError if missing
+GEMINI_KEY = None
+SEARCH_KEY = None
+SEARCH_CX = None
+
 try:
     GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
     SEARCH_KEY = st.secrets["SEARCH_API_KEY"]
     SEARCH_CX = st.secrets["SEARCH_ENGINE_ID"]
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
-    st.error("⚠️ Secrets not found! Please check Streamlit settings.")
+    st.error("⚠️ Secrets not found! Please check .streamlit/secrets.toml")
 
 # =====================================
 # 2) SESSION STATE MANAGEMENT
@@ -62,7 +67,7 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
             
-    # Initialize dynamic room keys (Guest, Conf, Adults, Children)
+    # Initialize dynamic room keys
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
@@ -101,6 +106,7 @@ def clean_room_type_string(raw_type):
 # =====================================
 
 def get_hotel_suggestions(query):
+    if not GEMINI_KEY: return []
     model = genai.GenerativeModel('gemini-2.0-flash')
     try:
         res = model.generate_content(f'Return JSON list of 3 official hotel names for: "{query}". JSON ONLY: ["Name 1", "Name 2"]').text
@@ -108,11 +114,13 @@ def get_hotel_suggestions(query):
     except: return []
 
 def detect_city(hotel_name):
+    if not GEMINI_KEY: return ""
     model = genai.GenerativeModel('gemini-2.0-flash')
     try: return model.generate_content(f'What city is "{hotel_name}" in? Return ONLY city name string.').text.strip()
     except: return ""
 
 def get_room_types(hotel_name):
+    if not GEMINI_KEY: return []
     model = genai.GenerativeModel('gemini-2.0-flash')
     try:
         res = model.generate_content(f'List 10 room names for "{hotel_name}". Return JSON list strings.').text
@@ -120,6 +128,7 @@ def get_room_types(hotel_name):
     except: return []
 
 def extract_pdf_data(pdf_file):
+    if not GEMINI_KEY: return None
     try:
         pdf_reader = pypdf.PdfReader(pdf_file)
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
@@ -132,6 +141,7 @@ def extract_pdf_data(pdf_file):
     except: return None
 
 def fetch_hotel_details_text(hotel, city, r_type):
+    if not GEMINI_KEY: return {}
     model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f'Get details for: "{hotel}" in "{city}". Return JSON: {{ "addr1": "Street", "addr2": "City/Zip", "phone": "Intl", "in": "3:00 PM", "out": "12:00 PM" }}'
     try: return json.loads(model.generate_content(prompt).text.replace("```json", "").replace("```", "").strip())
@@ -145,20 +155,21 @@ def fetch_hotel_data_callback():
     st.session_state.hotel_name = selected_hotel
     
     # Use Gemini to get City and Room Types from Google Search snippets
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    
-    # 1. City & Room Types
-    try:
-        search_res = google_search(f"{selected_hotel} location room types")
-        snippets = "\n".join([i.get('snippet','') for i in search_res])
-        prompt = f"""Based on these search results for "{selected_hotel}":\n{snippets}\n1. Identify the City.\n2. List 3-5 distinct Room Types found.\nReturn JSON: {{ "city": "CityName", "rooms": ["Type A", "Type B"] }}"""
-        raw = model.generate_content(prompt).text
-        data = json.loads(raw.replace("```json", "").replace("```", "").strip())
-        st.session_state.city = data.get("city", "")
-        st.session_state.fetched_room_types = data.get("rooms", [])
-    except: 
-        st.session_state.city = ""
-        st.session_state.fetched_room_types = ["Standard", "Deluxe"]
+    if GEMINI_KEY:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # 1. City & Room Types
+        try:
+            search_res = google_search(f"{selected_hotel} location room types")
+            snippets = "\n".join([i.get('snippet','') for i in search_res])
+            prompt = f"""Based on these search results for "{selected_hotel}":\n{snippets}\n1. Identify the City.\n2. List 3-5 distinct Room Types found.\nReturn JSON: {{ "city": "CityName", "rooms": ["Type A", "Type B"] }}"""
+            raw = model.generate_content(prompt).text
+            data = json.loads(raw.replace("```json", "").replace("```", "").strip())
+            st.session_state.city = data.get("city", "")
+            st.session_state.fetched_room_types = data.get("rooms", [])
+        except: 
+            st.session_state.city = ""
+            st.session_state.fetched_room_types = ["Standard", "Deluxe"]
 
     # 2. Images
     base_q = f"{selected_hotel} {st.session_state.city}"
@@ -169,6 +180,9 @@ def fetch_hotel_data_callback():
     ]
 
 def google_search(query, num=5):
+    if not SEARCH_KEY or not SEARCH_CX:
+        st.error("Search API Keys missing.")
+        return []
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
@@ -177,7 +191,8 @@ def google_search(query, num=5):
             st.error(f"Search API Error: {res.status_code}")
             return []
         return res.json().get("items", [])
-    except Exception:
+    except Exception as e:
+        st.error(f"Search failed: {str(e)}")
         return []
 
 def find_hotel_options(keyword):
@@ -190,6 +205,7 @@ def find_hotel_options(keyword):
     return hotels[:5]
 
 def fetch_image(query):
+    if not SEARCH_KEY or not SEARCH_CX: return None
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
                            params={"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
@@ -307,15 +323,18 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # 0.1 point gap (virtually seamless)
+    # 0.1 point gap
     gap = 0.1 * scale_factor 
     img_w = (w - (2 * gap)) / 3
-    img_h = 100 * scale_factor # Standard height
+    
+    # Standard height 100
+    img_h = 100 * scale_factor 
     
     for i in range(min(3, len(valid))):
         im = valid[i]
-        try: c.drawImage(im, x + i * (img_w + gap), y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+        try: c.drawImage(im, ix, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
         except: pass
+        ix += (img_w + gap)
     return y - img_h - (10 * scale_factor)
 
 def _build_policy_table(w):
@@ -514,6 +533,8 @@ with c1:
                 st.session_state.found_hotels = found
                 if not found:
                     st.error("No results found. Try a different keyword.")
+                else:
+                    st.rerun() # Ensure dropdown appears immediately
     
     if st.session_state.found_hotels:
         st.selectbox(
@@ -535,7 +556,6 @@ with c1:
             
             # Logic: If Room > 0 AND 'same' is checked, disable input and copy Room 0 value
             if i > 0 and same:
-                # Force update session state to match room 0
                 st.session_state[f"room_{i}_conf"] = st.session_state.get(f"room_{0}_conf", "")
                 c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf", disabled=True)
             else:
@@ -560,7 +580,6 @@ with c2:
     
     st.text_input("Final Room Name", key="room_final")
     st.text_input("Room Size (e.g. 35 sqm)", key="room_size")
-    # Adults input removed here as it is now per room
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
     st.text_area("Remarks (Optional)", key="remarks")
@@ -576,41 +595,22 @@ if st.button("Generate Voucher", type="primary"):
         if not st.session_state.bulk_data:
             mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
-                # Ensure we pick up the 'frozen' value if same_conf is active
-                if i > 0 and st.session_state.same_conf_check:
-                    c = mc
-                else:
-                    c = st.session_state.get(f"room_{i}_conf", "")
-                    
-                rooms.append({
-                    "guest": st.session_state.get(f"room_{i}_guest", ""),
-                    "conf": c,
-                    "adults": st.session_state.get(f"room_{i}_adults", 2),
-                    "children": st.session_state.get(f"room_{i}_children", 0)
-                })
+                c = mc if st.session_state.same_conf_check else st.session_state.get(f"room_{i}_conf", "")
+                rooms.append({"guest": st.session_state.get(f"room_{i}_guest", ""), "conf": c, "adults": st.session_state.get(f"room_{i}_adults", 2), "children": st.session_state.get(f"room_{i}_children", 0)})
         else:
-            # Fallback for Bulk: assumes standard 2 adults if not specified in CSV
             for r in st.session_state.bulk_data:
-                rooms.append({
-                    "guest": str(r.get("Guest Name", "")),
-                    "conf": str(r.get("Confirmation No", "")),
-                    "adults": int(r.get("Adults", 2)),
-                    "children": int(r.get("Children", 0))
-                })
+                rooms.append({"guest": str(r.get("Guest Name", "")), "conf": str(r.get("Confirmation No", "")), "adults": int(r.get("Adults", 2)), "children": int(r.get("Children", 0))})
         
         if rooms:
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
             imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
             
-            # Calculate Nights
             n_nights = (st.session_state.checkout - st.session_state.checkin).days
             if n_nights < 1: n_nights = 1
 
             pdf = generate_pdf_final({
                 "hotel": st.session_state.hotel_name, "checkin": st.session_state.checkin, "checkout": st.session_state.checkout,
-                "room_type": st.session_state.room_final, 
-                "meal_plan": st.session_state.meal_plan,
-                "cancellation": pol, "nights": n_nights, "room_size": st.session_state.room_size, "remarks": st.session_state.remarks
+                "room_type": st.session_state.room_final, "meal_plan": st.session_state.meal_plan, "cancellation": pol, "nights": n_nights, "room_size": st.session_state.room_size, "remarks": st.session_state.remarks
             }, info, rooms, imgs)
             
             st.success("Done!")
