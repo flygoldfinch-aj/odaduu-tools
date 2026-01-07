@@ -42,10 +42,9 @@ except Exception:
 # 2) SESSION STATE MANAGEMENT
 # =====================================
 def init_state():
-    # Define all default keys
     defaults = {
         'hotel_search_query': '', 'found_hotels': [], 
-        'hotel_name': '', 'city': '', 
+        'hotel_name': '', 'city': '', 'lead_guest': '', 
         'checkin': datetime.now().date(), 
         'checkout': datetime.now().date() + timedelta(days=1),
         'num_rooms': 1, 'room_type': '', 'adults': 2, 
@@ -54,21 +53,15 @@ def init_state():
         'fetched_room_types': [], 'ai_room_str': '',
         'last_uploaded_file': None, 'bulk_data': [],
         'hotel_images': [None, None, None],
-        'selected_hotel_key': None,
-        'room_final': ''
+        'selected_hotel_key': None
     }
-    
-    # Initialize keys if they don't exist
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-            
-    # Initialize dynamic room keys
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
 
-# Ensure state is initialized immediately
 init_state()
 
 # =====================================
@@ -99,6 +92,28 @@ def clean_room_type_string(raw_type):
 # =====================================
 # 4) AI & SEARCH FUNCTIONS
 # =====================================
+
+def google_search(query, num=5):
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code != 200:
+            st.error(f"Search API Error: {res.status_code} - {res.text}")
+            return []
+        return res.json().get("items", [])
+    except Exception as e:
+        st.error(f"Search failed: {str(e)}")
+        return []
+
+def find_hotel_options(keyword):
+    if not keyword: return []
+    results = google_search(f"Hotel {keyword} official site")
+    hotels = []
+    for item in results:
+        title = item.get('title', '').split('|')[0].split('-')[0].strip()
+        if title and title not in hotels: hotels.append(title)
+    return hotels[:5]
 
 def get_hotel_suggestions(query):
     model = genai.GenerativeModel('gemini-2.0-flash')
@@ -168,27 +183,11 @@ def fetch_hotel_data_callback():
         fetch_image(f"{base_q} hotel room")
     ]
 
-def google_search(query, num=5):
-    try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
-        res = requests.get(url, params=params, timeout=5)
-        return res.json().get("items", []) if res.status_code == 200 else []
-    except: return []
-
-def find_hotel_options(keyword):
-    results = google_search(f"Hotel {keyword} official site")
-    hotels = []
-    for item in results:
-        title = item.get('title', '').split('|')[0].split('-')[0].strip()
-        if title and title not in hotels: hotels.append(title)
-    return hotels[:5]
-
 def fetch_image(query):
     try:
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
                            params={"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
-        return res.json()["items"][0]["link"]
+        return res.json().get("items", [{}])[0].get("link")
     except: return None
 
 def get_img_reader(url):
@@ -240,15 +239,14 @@ def _draw_header(c, w, y_top):
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
-def _draw_split_box(c, x, y, w, guest_rows, hotel_rows):
+def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows):
     """
-    Draws ONE giant box split into 2 columns:
+    Draws ONE giant box with thick black lines containing two columns:
     Left: Guest Info (incl Room Type, Pax, Meal, Cancellation)
     Right: Hotel Details (incl Checkin/out, Conf No)
-    Border Color: Black
     """
     
-    # --- SUB-TABLE 1: GUEST INFO (Left) ---
+    # Left Column Data
     g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
     t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
     t_guest.setStyle(TableStyle([
@@ -260,7 +258,7 @@ def _draw_split_box(c, x, y, w, guest_rows, hotel_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
     
-    # --- SUB-TABLE 2: HOTEL DETAILS (Right) ---
+    # Right Column Data
     h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
     t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
     t_hotel.setStyle(TableStyle([
@@ -272,10 +270,10 @@ def _draw_split_box(c, x, y, w, guest_rows, hotel_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # --- MASTER TABLE: [Guest] | [Hotel] ---
+    # Master Table: 1 Row, 2 Columns
     master_data = [[t_guest, t_hotel]]
-    master_table = Table(master_data, colWidths=[w/2, w/2])
     
+    master_table = Table(master_data, colWidths=[w/2, w/2])
     master_table.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 1.5, black), # Thick Black Border
         ("LINEAFTER", (0, 0), (0, 0), 0.5, lightgrey), # Vertical Separator
@@ -295,6 +293,7 @@ def _draw_image_row(c, x, y, w, imgs):
     if not valid: return y
 
     gap = 10; img_h = 90; img_w = (w - (2 * gap)) / 3
+    # Center the images if less than 3
     total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
     ix = x + (w - total_w) / 2
     
@@ -384,7 +383,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         ]
         
         # 2. MEGA BOX (2-Column Layout)
-        y = _draw_split_box(c, left, y, content_w, guest_rows, hotel_rows)
+        y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows)
 
         # 3. IMAGES (Below Mega Box)
         y = _draw_image_row(c, left, y, content_w, imgs)
@@ -454,7 +453,14 @@ c1, c2 = st.columns(2)
 with c1:
     q = st.text_input("Search Hotel")
     if st.button("🔎 Search"):
-        st.session_state.found_hotels = find_hotel_options(q)
+        if not q:
+            st.warning("Please enter a hotel name.")
+        else:
+            with st.spinner("Searching..."):
+                found = find_hotel_options(q)
+                st.session_state.found_hotels = found
+                if not found:
+                    st.error("No results found. Try a different keyword.")
     
     if st.session_state.found_hotels:
         st.selectbox(
@@ -525,3 +531,4 @@ if st.button("Generate Voucher", type="primary"):
             st.download_button("Download", pdf, "Voucher.pdf", "application/pdf")
         else:
             st.error("No guest data found.")
+        
