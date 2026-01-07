@@ -232,74 +232,77 @@ def _draw_header(c, w, y_top):
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
-def _draw_mega_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
-    """
-    Draws a single box containing:
-    - Row 1: Guest Info (Left) | Hotel Info (Right)
-    - Row 2: Room Info (Full Width)
-    """
+def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
+    """Draws ONE giant box with thick black lines containing all info."""
     
-    # --- SUB-TABLES ---
+    # Helper to add section headers
+    def section_header(title):
+        return [title.upper(), ""]
+
+    # Combine Data
+    combined_data = []
+    combined_data.append(section_header("Guest Information"))
+    combined_data.extend(guest_rows)
+    combined_data.append(["", ""]) # Spacer row
+    combined_data.append(section_header("Hotel Details"))
+    combined_data.extend(hotel_rows)
+    combined_data.append(["", ""]) # Spacer row
+    combined_data.append(section_header("Room Information"))
+    combined_data.extend(room_rows)
+
+    # Note: Table structure is 2 columns.
+    # Guest and Hotel info might need to be split to look like 2 columns in the code,
+    # but here we are stacking them linearly based on your 'mega box' request.
+    # To achieve "Guest" (Left) and "Hotel" (Right) inside one box, we need a nested table approach 
+    # OR a 2-column main table where Room info spans both.
     
-    # Guest Table
-    g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
-    t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
+    # Redefining structure for Side-by-Side Guest/Hotel:
+    
+    # Sub-table 1: Guest (Left)
+    g_table_data = [["GUEST INFORMATION", ""]] + guest_rows
+    t_guest = Table(g_table_data, colWidths=[90, (w/2) - 100])
     t_guest.setStyle(TableStyle([
         ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), # Header Blue
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("padding", (0,0), (-1,-1), 2)
-    ]))
-    
-    # Hotel Table
-    h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
-    t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
-    t_hotel.setStyle(TableStyle([
-        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("padding", (0,0), (-1,-1), 2)
-    ]))
-    
-    # Room Table
-    r_data = [["ROOM INFORMATION", ""]]; r_data.extend(room_rows)
-    t_room = Table(r_data, colWidths=[90, w - 100])
-    t_room.setStyle(TableStyle([
-        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("padding", (0,0), (-1,-1), 2)
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0,0), (-1,-1), 0), ("RIGHTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # --- MASTER TABLE LAYOUT ---
-    # Row 1: [Guest Table] | [Hotel Table]
-    # Row 2: [Room Table (spans 2 columns)]
+    # Sub-table 2: Hotel (Right)
+    h_table_data = [["HOTEL DETAILS", ""]] + hotel_rows
+    t_hotel = Table(h_table_data, colWidths=[70, (w/2) - 80])
+    t_hotel.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0,0), (-1,-1), 0), ("RIGHTPADDING", (0,0), (-1,-1), 0),
+    ]))
+
+    # Sub-table 3: Room (Bottom, Spanning)
+    r_table_data = [["ROOM INFORMATION", ""]] + room_rows
+    t_room = Table(r_table_data, colWidths=[90, w - 110])
+    t_room.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0,0), (-1,-1), 0), ("RIGHTPADDING", (0,0), (-1,-1), 0),
+    ]))
+
+    # Master Table Layout
+    # Row 0: Guest Table | Hotel Table
+    # Row 1: Room Table (Span 2)
     
     master_data = [
         [t_guest, t_hotel],
-        [t_room, ""] # Second cell placeholder
+        [t_room, ""]
     ]
     
-    master_table = Table(master_data, colWidths=[w/2, w/2])
-    master_table.setStyle(TableStyle([
-        # Span the Room Info across both columns
-        ("SPAN", (0, 1), (1, 1)),
-        
-        # Outer Box (Thick Black 1.5pt)
-        ("BOX", (0, 0), (-1, -1), 1.5, black),
-        
-        # Inner line separating Row 1 and Row 2
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, lightgrey),
-        
-        # Inner line separating Guest and Hotel
-        ("LINEAFTER", (0, 0), (0, 0), 0.5, lightgrey),
-        
+    main_table = Table(master_data, colWidths=[w/2, w/2])
+    main_table.setStyle(TableStyle([
+        ("SPAN", (0, 1), (1, 1)), # Span Room Info
+        ("BOX", (0, 0), (-1, -1), 1.5, black), # Thick Border
+        ("LINEBELOW", (0, 0), (1, 0), 0.5, lightgrey), # Line between Guest/Hotel and Room
+        ("LINEAFTER", (0, 0), (0, 0), 0.5, lightgrey), # Vertical separator
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
@@ -307,8 +310,8 @@ def _draw_mega_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     
-    tw, th = master_table.wrapOn(c, w, 9999)
-    master_table.drawOn(c, x, y - th)
+    tw, th = main_table.wrapOn(c, w, 9999)
+    main_table.drawOn(c, x, y - th)
     return y - th - 15
 
 def _draw_image_row(c, x, y, w, imgs):
@@ -402,7 +405,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         ]
         if data.get("room_size"): room_rows.insert(1, ["Room Size:", data["room_size"]])
 
-        # 2. MEGA BOX (Info)
+        # 2. MEGA BOX (Info) - Guest & Hotel side-by-side, Room below
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
 
         # 3. IMAGES (Below Mega Box)
