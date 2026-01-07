@@ -3,8 +3,8 @@ import google.generativeai as genai
 import requests
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.colors import Color, lightgrey, black, white
-from reportlab.platypus import Table, TableStyle, Paragraph
+from reportlab.lib.colors import Color, lightgrey, black, white, HexColor
+from reportlab.platypus import Table, TableStyle, Paragraph, Image as PlatypusImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.lib.units import inch
@@ -20,10 +20,10 @@ from math import sin, cos, radians
 st.set_page_config(page_title="Odaduu Voucher Tool", page_icon="🌏", layout="wide")
 
 # --- BRANDING ---
-BRAND_BLUE = Color(0.0, 0.25, 0.5) 
-BRAND_GOLD = Color(0.9, 0.75, 0.1) 
+# Exact colors from your reference
+BRAND_BLUE = Color(0.05, 0.25, 0.45) # Deep Blue
+BRAND_GOLD = Color(0.85, 0.65, 0.13) # Gold
 COMPANY_NAME = "Odaduu Travel DMC"
-EMAIL_CONTACT = "reservations@odaduu.com"
 LOGO_FILE = "logo.png"
 
 try:
@@ -142,23 +142,20 @@ def extract_pdf_data(pdf_file):
         return json.loads(res.replace("```json", "").replace("```", "").strip())
     except: return None
 
-# --- 5. PDF GENERATION (1-PAGE FIXED LAYOUT) ---
+# --- 5. PDF GENERATION (DYNAMIC FLOW LAYOUT) ---
 
 def draw_vector_seal(c, x, y):
-    """Draws Odaduu Seal - Double Circle with Text."""
+    """Draws Odaduu Seal with 'CERTIFIED VOUCHER' top and 'OFFICIAL' bottom."""
     c.saveState()
     c.setStrokeColor(BRAND_BLUE); c.setFillColor(BRAND_BLUE); c.setFillAlpha(0.8); c.setLineWidth(1.5)
     
-    # Concentric Circles
     cx, cy = x + 40, y + 40
     c.circle(cx, cy, 40, stroke=1, fill=0)
     c.setLineWidth(0.5); c.circle(cx, cy, 36, stroke=1, fill=0)
     
-    # Center Text
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy+4, "ODADUU")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy-6, "TRAVEL DMC")
     
-    # Arched Text
     c.setFont("Helvetica-Bold", 6)
     
     # "CERTIFIED VOUCHER" (Top)
@@ -199,7 +196,7 @@ def generate_pdf(data, info, imgs, rooms_list):
     right_margin = w - 40
     content_width = right_margin - left_margin
     
-    # Load images
+    # Pre-load images
     i_ext = get_img_reader(imgs[0])
     i_lobby = get_img_reader(imgs[1])
     i_room = get_img_reader(imgs[2])
@@ -207,43 +204,44 @@ def generate_pdf(data, info, imgs, rooms_list):
     for i, room in enumerate(rooms_list):
         if i > 0: c.showPage() 
         
-        y = h - 40 # Top margin
+        y = h - 40
         
-        # 1. IMAGES (Top Row - Compact)
-        # Using 3 images side-by-side, height limited to 85pts to save space
-        img_h = 85
+        # 1. HEADER (Logo Left, Title Right)
+        try: 
+            c.drawImage(LOGO_FILE, left_margin, y-40, 120, 40, mask='auto', preserveAspectRatio=True)
+        except: 
+            c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 20); c.drawString(left_margin, y-25, COMPANY_NAME)
+        
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
+        c.drawRightString(right_margin, y - 25, "HOTEL CONFIRMATION VOUCHER")
+        y -= 60
+
+        # 2. IMAGES (3 Across)
+        img_h = 90
         img_w = 165
         ix = left_margin
         valid_imgs = [x for x in [i_ext, i_lobby, i_room] if x]
         
         if valid_imgs:
             for img in valid_imgs[:3]:
-                try: c.drawImage(img, ix, y - img_h, img_w, img_h); ix += (img_w + 10)
+                try: c.drawImage(img, ix, y - img_h, img_w, img_h)
                 except: pass
+                ix += (img_w + 10)
             y -= (img_h + 20)
         else:
-            y -= 20 # Small spacer if no images
+            y -= 10 
 
-        # 2. LOGO & TITLE
-        # Logo on left, Title on Right
-        logo_h = 35
-        try: c.drawImage(LOGO_FILE, left_margin, y - logo_h, 100, logo_h, mask='auto', preserveAspectRatio=True)
-        except: 
-            c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 18); c.drawString(left_margin, y-25, COMPANY_NAME)
-        
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
-        c.drawRightString(right_margin, y - 25, "HOTEL CONFIRMATION VOUCHER")
-        y -= (logo_h + 25)
-
-        # Helper for tables
-        def draw_data_table(title, data_list):
+        # --- DYNAMIC TABLE ENGINE (Prevents Overlap) ---
+        def draw_section(title, data_list, col_widths):
             nonlocal y
+            # Title
             c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, y, title)
             y -= 4
             c.setStrokeColor(lightgrey); c.line(left_margin, y, right_margin, y)
-            y -= 12
+            y -= 5
             
-            t = Table(data_list, colWidths=[110, 390])
+            # Styles
+            t = Table(data_list, colWidths=col_widths)
             t.setStyle(TableStyle([
                 ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
                 ('FONTNAME', (1,0), (1,-1), 'Helvetica'),
@@ -251,38 +249,45 @@ def generate_pdf(data, info, imgs, rooms_list):
                 ('TEXTCOLOR', (0,0), (-1,-1), Color(0.2,0.2,0.2)),
                 ('VALIGN', (0,0), (-1,-1), 'TOP'),
                 ('LEFTPADDING', (0,0), (-1,-1), 0),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
             ]))
-            tw, th = t.wrapOn(c, content_width, 200)
+            
+            # Wrap & Draw
+            tw, th = t.wrapOn(c, content_width, 500) # Give it space to measure
+            
+            # Check Page Break
+            if y - th < 50: 
+                c.showPage(); y = h - 50
+            
             t.drawOn(c, left_margin, y - th)
-            y -= (th + 10) # Compact gap
+            y -= (th + 15) # Move cursor down by exact height of table + gap
 
         # 3. GUEST INFO
-        draw_data_table("Guest Information", [
+        draw_section("Guest Information", [
             ["Guest Name(s):", room['guest']],
             ["Confirmation No:", room['conf']],
             ["Booking Date:", datetime.now().strftime("%d %b %Y")]
-        ])
+        ], [110, 390])
 
-        # 4. HOTEL DETAILS
-        draw_data_table("Hotel Details", [
+        # 4. HOTEL DETAILS (Address can be long, so dynamic height is key)
+        draw_section("Hotel Details", [
             ["Hotel:", data['hotel']],
-            ["Address:", info.get('addr1', '')],
+            ["Address:", Paragraph(info.get('addr1', ''), getSampleStyleSheet()['Normal'])], # Wrap Text
             ["Check-In:", data['in'].strftime("%d %b %Y")],
             ["Check-Out:", data['out'].strftime("%d %b %Y")]
-        ])
+        ], [110, 390])
 
         # 5. ROOM INFO
-        draw_data_table("Room Information", [
+        draw_section("Room Information", [
             ["Room Type:", data['room_type']],
             ["Pax:", f"{data['adults']} Adults"],
             ["Meal Plan:", data['meal']],
             ["Cancellation:", data['policy']]
-        ])
+        ], [110, 390])
 
         # 6. POLICY TABLE (Grid Style)
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y, "HOTEL POLICIES")
-        y -= 12
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 11); c.drawString(left_margin, y, "HOTEL POLICIES")
+        y -= 15
         
         pol_data = [
             ["Policy", "Time / Detail"],
@@ -300,37 +305,36 @@ def generate_pdf(data, info, imgs, rooms_list):
             ('PADDING', (0,0), (-1,-1), 3),
         ]))
         pw, ph = pol_table.wrapOn(c, content_width, 150)
+        
+        if y - ph < 50: c.showPage(); y = h - 50
         pol_table.drawOn(c, left_margin, y - ph)
         y -= (ph + 15)
 
-        # 7. TERMS & CONDITIONS (Compact Font to Fit)
-        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 9); c.drawString(left_margin, y, "TERMS & CONDITIONS")
-        y -= 10
+        # 7. T&C (Small Font)
+        c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left_margin, y, "STANDARD TERMS & CONDITIONS")
+        y -= 12
         
         tnc_text = [
-            "1. Validity: Voucher must be presented at check-in.",
-            f"2. ID Proof: Lead guest {room['guest']} must provide valid ID.",
-            "3. No-Show: 100% charge applies for no-shows.",
-            "4. Extras: Incidentals (mini-bar/laundry) are paid directly.",
+            "1. Voucher Validity: Must be presented at hotel front desk.",
+            f"2. Identification: Guest(s) {room['guest']} must present valid ID.",
+            "3. No-Show: Full charge applies for no-shows.",
+            "4. Incidentals: Paid by guest directly.",
             "5. Occupancy: Standard occupancy rules apply.",
             "6. Rights: Hotel reserves right of admission.",
             "7. Liability: Use safety deposit box for valuables.",
-            "8. Resale: Booking is non-transferable/non-resaleable.",
+            "8. Resale: Booking is non-transferable.",
             "9. Tax: City/Tourism tax payable at hotel if applicable.",
-            "10. Bedding: Bed type subject to availability."
+            "10. Bedding: Subject to availability."
         ]
         
-        # Draw T&C as simple text lines to save space
         c.setFillColor(black); c.setFont("Helvetica", 7)
         for line in tnc_text:
             c.drawString(left_margin, y, line)
-            y -= 9 # Tight leading
-            
-        # 8. FOOTER SEAL (Absolute Position Bottom Right)
+            y -= 9 
+
+        # 8. FOOTER SEAL (Fixed at bottom)
         draw_vector_seal(c, w - 130, 45)
-        
-        # Footer Line
-        c.setStrokeColor(BRAND_GOLD); c.setLineWidth(2); c.line(0, 40, w, 40)
+        c.setStrokeColor(BRAND_GOLD); c.setLineWidth(3); c.line(0, 40, w, 40)
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 8); c.drawString(left_margin, 25, f"Issued by: {COMPANY_NAME}")
         
     c.save(); buffer.seek(0); return buffer
@@ -366,14 +370,6 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
                         st.session_state[f'room_{i}_conf'] = r.get('confirmation_no', '')
                         st.session_state[f'room_{i}_guest'] = r.get('guest_name', '')
                 
-                # Auto-Search
-                if st.session_state.hotel_name:
-                    st.session_state.found_hotels = [st.session_state.hotel_name]
-                    if not st.session_state.city:
-                        st.session_state.city = detect_city(st.session_state.hotel_name)
-                    st.session_state.fetched_room_types = fetch_real_room_types(st.session_state.hotel_name, st.session_state.city)
-                    st.session_state.hotel_images = get_smart_images(st.session_state.hotel_name, st.session_state.city)
-
                 st.session_state.last_uploaded_file = up_file.name
                 st.success("PDF Loaded!")
                 st.rerun()
@@ -382,58 +378,45 @@ with st.expander("📤 Upload Supplier Voucher (PDF)", expanded=True):
 c1, c2 = st.columns(2)
 
 with c1:
-    st.subheader("1. Hotel Search")
-    search_q = st.text_input("Enter Keyword (e.g. 'Atlantis')", key="hotel_search_query")
+    st.subheader("1. Search Hotel")
+    search_q = st.text_input("Enter Hotel Name", key="hotel_search_query")
     
-    if st.button("🔎 Find Hotels"):
-        with st.spinner("Searching..."):
+    if st.button("🔎 Search"):
+        with st.spinner("Fetching data..."):
             st.session_state.found_hotels = find_hotel_options(search_q)
-            if not st.session_state.found_hotels: st.warning("No hotels found.")
     
     if st.session_state.found_hotels:
-        selected_hotel = st.selectbox("Select Correct Hotel", st.session_state.found_hotels, key="hotel_selector")
-        if selected_hotel != st.session_state.hotel_name:
-            st.session_state.hotel_name = selected_hotel
-            with st.spinner(f"Loading data for {selected_hotel}..."):
-                st.session_state.city = detect_city(selected_hotel)
-                st.session_state.fetched_room_types = fetch_real_room_types(selected_hotel, st.session_state.city)
-                st.session_state.hotel_images = get_smart_images(selected_hotel, st.session_state.city)
-                st.rerun()
-                
+        selected = st.selectbox("Select Hotel", st.session_state.found_hotels)
+        if selected != st.session_state.hotel_name:
+            st.session_state.hotel_name = selected
+            # Auto-Fetch on Select
+            st.session_state.city = detect_city(selected)
+            st.session_state.fetched_room_types = fetch_real_room_types(selected, st.session_state.city)
+            st.session_state.hotel_images = get_smart_images(selected, st.session_state.city)
+            st.rerun()
+
     st.text_input("Final Hotel Name", key="hotel_name")
     st.text_input("City", key="city")
 
-    st.subheader("2. Guest Details")
-    input_mode = st.radio("Mode", ["Manual", "Bulk CSV"], horizontal=True)
+    st.subheader("2. Guests")
+    mode = st.radio("Mode", ["Manual", "Bulk CSV"], horizontal=True)
     
-    if input_mode == "Manual":
-        n = st.number_input("No. of Rooms", 1, 50, key="num_rooms")
-        same_conf = st.checkbox("Same Conf No?", key="same_conf_check")
-        
+    if mode == "Manual":
+        n = st.number_input("Rooms", 1, 50, key="num_rooms")
+        same = st.checkbox("Same Conf?", key="same_conf_check")
         for i in range(n):
             col_a, col_b = st.columns([2, 1])
-            col_a.text_input(f"Room {i+1} Guest(s)", key=f"room_{i}_guest", help="e.g. 'John & Jane Doe'")
-            
-            if i == 0:
-                col_b.text_input("Conf No", key=f"room_{i}_conf")
-            else:
-                if same_conf:
-                    col_b.info("Using Room 1 Conf")
-                else:
-                    col_b.text_input("Conf No", key=f"room_{i}_conf")
+            col_a.text_input(f"Room {i+1} Guest(s)", key=f"room_{i}_guest")
+            if i == 0: col_b.text_input("Conf", key=f"room_{i}_conf")
+            elif not same: col_b.text_input("Conf", key=f"room_{i}_conf")
     else:
-        st.subheader("Bulk Upload")
-        csv_file = st.file_uploader("Upload CSV", type="csv")
-        if csv_file:
-            df = pd.read_csv(csv_file)
-            if 'Guest Name' in df.columns and 'Confirmation No' in df.columns:
-                st.session_state.bulk_data = df.to_dict('records')
-                st.success(f"Loaded {len(df)} records.")
-            else:
-                st.error("CSV Error: Missing 'Guest Name' or 'Confirmation No' columns.")
+        f = st.file_uploader("CSV", type="csv")
+        if f: 
+            df = pd.read_csv(f)
+            st.session_state.bulk_data = df.to_dict('records')
 
 with c2:
-    st.subheader("3. Stay Details")
+    st.subheader("3. Stay")
     if st.session_state.checkout <= st.session_state.checkin:
         st.session_state.checkout = st.session_state.checkin + timedelta(days=1)
     
@@ -446,51 +429,40 @@ with c2:
     if st.session_state.fetched_room_types: opts.extend(st.session_state.fetched_room_types)
     opts.append("Manual Entry...")
     
-    sel = st.selectbox("Room Type Options", opts)
-    final_room = st.text_input("Room Type Name", value="" if sel == "Manual Entry..." else sel)
+    sel = st.selectbox("Room Type", opts)
+    room_final = st.text_input("Final Room Name", value="" if sel == "Manual Entry..." else sel)
     
     st.number_input("Adults", 1, key="adults")
     st.selectbox("Meal", ["Breakfast Only", "Room Only", "Half Board", "Full Board"], key="meal_plan")
     
-    ptype = st.radio("Policy", ["Non-Refundable", "Refundable"], horizontal=True)
-    if ptype == "Refundable":
+    if st.radio("Policy", ["Non-Ref", "Refundable"], horizontal=True) == "Refundable":
         d = st.number_input("Free Cancel Days", 3)
-        policy_txt = f"Free Cancellation until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
-    else:
-        policy_txt = "Non-Refundable & Non-Amendable"
-    st.info(f"Policy: {policy_txt}")
+        pol = f"Free Cancel until {(st.session_state.checkin - timedelta(days=d)).strftime('%d %b %Y')}"
+    else: pol = "Non-Refundable"
 
 if st.button("Generate Vouchers", type="primary"):
-    with st.spinner("Generating..."):
-        rooms_to_process = []
-        if input_mode == "Manual":
-            master_conf = st.session_state.get("room_0_conf", "")
+    with st.spinner("Processing..."):
+        rooms = []
+        if mode == "Manual":
+            mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
-                c = master_conf if st.session_state.same_conf_check else st.session_state.get(f"room_{i}_conf", "")
-                g = st.session_state.get(f"room_{i}_guest", "")
-                rooms_to_process.append({"guest": g, "conf": c})
+                c = mc if st.session_state.same_conf_check else st.session_state.get(f"room_{i}_conf", "")
+                rooms.append({"guest": st.session_state.get(f"room_{i}_guest", ""), "conf": c})
         else:
             if st.session_state.bulk_data:
-                for row in st.session_state.bulk_data:
-                    rooms_to_process.append({"guest": row.get("Guest Name", ""), "conf": str(row.get("Confirmation No", ""))})
+                for r in st.session_state.bulk_data:
+                    rooms.append({"guest": r.get("Guest Name", ""), "conf": str(r.get("Confirmation No", ""))})
         
-        if not rooms_to_process:
-            st.error("No guest data!")
-        else:
+        if rooms:
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city)
             imgs = st.session_state.hotel_images if any(st.session_state.hotel_images) else get_smart_images(st.session_state.hotel_name, st.session_state.city)
             
-            pdf_data = {
-                "hotel": st.session_state.hotel_name,
-                "in": st.session_state.checkin,
-                "out": st.session_state.checkout,
-                "room_type": final_room,
-                "adults": st.session_state.adults,
-                "meal": st.session_state.meal_plan,
-                "policy": policy_txt
-            }
+            pdf = generate_pdf({
+                "hotel": st.session_state.hotel_name, "in": st.session_state.checkin, "out": st.session_state.checkout,
+                "room_type": room_final, "adults": st.session_state.adults, "meal": st.session_state.meal_plan, "policy": pol
+            }, info, imgs, rooms)
             
-            pdf_bytes = generate_pdf(pdf_data, info, imgs, rooms_to_process)
-            
-            st.success(f"Generated {len(rooms_to_process)} Vouchers!")
-            st.download_button("⬇️ Download PDF", pdf_bytes, "Vouchers.pdf", "application/pdf")
+            st.success("Done!")
+            st.download_button("Download", pdf, "Vouchers.pdf", "application/pdf")
+        else:
+            st.error("No data!")
