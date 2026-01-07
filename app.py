@@ -512,3 +512,5 @@ if st.button("Generate Voucher", type="primary"):
             
             st.success("Done!")
             st.download_button("Download", pdf, "Voucher.pdf", "application/pdf")
+        else:
+            st.error("No guest data found.")
