@@ -36,7 +36,10 @@ try:
     SEARCH_CX = st.secrets["SEARCH_ENGINE_ID"]
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
-    st.error("⚠️ Secrets not found! Please check .streamlit/secrets.toml")
+    # Fail silently/gracefully if secrets are missing to allow local dev without crash
+    GEMINI_KEY = None
+    SEARCH_KEY = None
+    SEARCH_CX = None
 
 # =====================================
 # 2) SESSION STATE MANAGEMENT
@@ -172,18 +175,16 @@ def fetch_hotel_data_callback():
 
 def google_search(query, num=5):
     if not SEARCH_KEY or not SEARCH_CX:
-        st.error("Search API Keys missing.")
+        # Avoid error if keys not set in local env
         return []
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200:
-            st.error(f"Search API Error: {res.status_code}")
             return []
         return res.json().get("items", [])
-    except Exception as e:
-        st.error(f"Search failed: {str(e)}")
+    except Exception:
         return []
 
 def find_hotel_options(keyword):
@@ -240,14 +241,12 @@ def draw_vector_seal(c, x, y):
     c.restoreState()
 
 def _draw_header(c, w, y_top):
-    # Centered Logo
     logo_w, logo_h = 140, 55
     try: 
         c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
     
-    # Centered Title
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
@@ -480,6 +479,19 @@ if st.button("🔄 Reset"):
     for k in list(st.session_state.keys()): del st.session_state[k]
     st.rerun()
 
+# Helper for Smart Mapping (Case Insensitive + variations)
+def smart_get_col(row, possibilities, default_val=""):
+    # Normalize row keys
+    row_keys_norm = {k.strip().lower(): k for k in row.keys()}
+    
+    for p in possibilities:
+        p_norm = p.strip().lower()
+        if p_norm in row_keys_norm:
+            val = row[row_keys_norm[p_norm]]
+            if pd.notna(val) and str(val).strip() != "":
+                return val
+    return default_val
+
 with st.expander("📤 Upload PDF", expanded=True):
     up_file = st.file_uploader("PDF", type="pdf")
     if up_file and st.session_state.last_uploaded_file != up_file.name:
@@ -537,7 +549,10 @@ with c1:
     st.text_input("Hotel", key="hotel_name")
     st.text_input("City", key="city")
     
-    if st.radio("Mode", ["Manual", "Bulk"]) == "Manual":
+    # MODE SELECTION
+    mode = st.radio("Mode", ["Manual", "Bulk"])
+    
+    if mode == "Manual":
         n = st.number_input("Rooms", 1, 50, key="num_rooms")
         same = st.checkbox("Same Conf?", key="same_conf_check")
         for i in range(n):
@@ -545,7 +560,6 @@ with c1:
             c_a.text_input(f"Guest {i+1}", key=f"room_{i}_guest")
             
             if i > 0 and same:
-                # Force update session state
                 st.session_state[f"room_{i}_conf"] = st.session_state.get(f"room_{0}_conf", "")
                 c_b.text_input(f"Conf {i+1}", key=f"room_{i}_conf", disabled=True)
             else:
@@ -553,9 +567,46 @@ with c1:
                 
             c_c.number_input("Adt", 1, 10, key=f"room_{i}_adults")
             c_d.number_input("Chd", 0, 10, key=f"room_{i}_children")
+            
     else:
+        # --- BULK MODE WITH EDITABLE GRID ---
         f = st.file_uploader("CSV", type="csv")
-        if f: st.session_state.bulk_data = pd.read_csv(f).to_dict("records")
+        if f:
+            df = pd.read_csv(f)
+            
+            # --- PRE-PROCESS TO STANDARDIZE COLUMNS ---
+            processed_data = []
+            for _, row in df.iterrows():
+                # Guest Name
+                g_name = smart_get_col(row, ["Guest Name", "Guests", "Guest", "Name", "Guest_Name"])
+                
+                # Confirmation No (REMOVED 'Room_No' from here to fix bug)
+                c_no = smart_get_col(row, ["Confirmation No", "Confirmation", "Conf", "Conf_No", "Booking Ref"])
+                
+                # Adults (Calculate if missing)
+                adt_raw = smart_get_col(row, ["Adults", "Adult", "adults", "ADT", "Adt"])
+                if adt_raw != "":
+                    try: adt = int(adt_raw)
+                    except: adt = 2
+                else:
+                    adt = len(str(g_name).split(',')) if g_name else 2
+                
+                # Children
+                chd_raw = smart_get_col(row, ["Children", "Child", "children", "child", "Kids", "kids", "CHD", "Chd"])
+                try: chd = int(chd_raw) if chd_raw != "" else 0
+                except: chd = 0
+                
+                processed_data.append({
+                    "Guest Name": g_name,
+                    "Confirmation No": c_no,
+                    "Adults": adt,
+                    "Children": chd
+                })
+            
+            # Show Editable Grid
+            st.info("👇 Edit data below if needed (e.g. fix Pax counts or Conf Nos)")
+            edited_df = st.data_editor(pd.DataFrame(processed_data), num_rows="dynamic")
+            st.session_state.bulk_data = edited_df.to_dict("records")
 
 with c2:
     if st.session_state.checkout <= st.session_state.checkin: st.session_state.checkout = st.session_state.checkin + timedelta(days=1)
@@ -582,7 +633,9 @@ with c2:
 if st.button("Generate Voucher", type="primary"):
     with st.spinner("Processing..."):
         rooms = []
-        if not st.session_state.bulk_data:
+        
+        # --- GATHER DATA BASED ON MODE ---
+        if mode == "Manual":
             mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
                 if i > 0 and st.session_state.same_conf_check:
@@ -597,26 +650,15 @@ if st.button("Generate Voucher", type="primary"):
                     "children": st.session_state.get(f"room_{i}_children", 0)
                 })
         else:
-            for r in st.session_state.bulk_data:
-                # --- FIXED CSV PARSING ---
-                g_name = str(r.get("Guest Name") or r.get("Guests") or r.get("Guest") or "")
-                c_no = str(r.get("Confirmation No") or r.get("Confirmation") or r.get("Conf") or r.get("Room_No") or r.get("Room") or "")
-                
-                # Auto-calculate adults if missing
-                if "Adults" in r and r["Adults"]:
-                    adt = int(r["Adults"])
-                else:
-                    # Fallback: Count commas + 1
-                    adt = len(g_name.split(',')) if g_name else 2
-                
-                chd = int(r.get("Children", 0))
-
-                rooms.append({
-                    "guest": g_name,
-                    "conf": c_no,
-                    "adults": adt,
-                    "children": chd
-                })
+            # Bulk Mode (Uses the Edited DF)
+            if st.session_state.bulk_data:
+                for r in st.session_state.bulk_data:
+                    rooms.append({
+                        "guest": str(r.get("Guest Name", "")),
+                        "conf": str(r.get("Confirmation No", "")),
+                        "adults": int(r.get("Adults", 2)),
+                        "children": int(r.get("Children", 0))
+                    })
         
         if rooms:
             info = fetch_hotel_details_text(st.session_state.hotel_name, st.session_state.city, st.session_state.room_final)
@@ -635,4 +677,4 @@ if st.button("Generate Voucher", type="primary"):
             st.success("Done!")
             st.download_button("Download", pdf, "Voucher.pdf", "application/pdf")
         else:
-            st.error("No guest data found.")
+            st.error("No guest data found. Please add rooms.")
