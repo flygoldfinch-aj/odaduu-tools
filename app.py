@@ -28,7 +28,6 @@ LOGO_FILE = "logo.png"
 
 FOOTER_LINE_Y = 40
 FOOTER_RESERVED_HEIGHT = 110
-# We allow drawing a bit lower if needed to squeeze into one page
 MIN_CONTENT_Y = FOOTER_LINE_Y + FOOTER_RESERVED_HEIGHT 
 
 try:
@@ -229,51 +228,50 @@ def draw_vector_seal(c, x, y):
     c.restoreState()
 
 def _draw_header(c, w, y_top):
+    # Centered Logo
     logo_w, logo_h = 140, 55
     try: 
         c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
     
+    # Centered Title
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
 def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
     """
-    Draws ONE giant box with thick black lines containing two columns:
-    Left: Guest Info
-    Right: Hotel Details
-    Bottom: Room Info (including Conf No, Meal, Nights)
+    Draws ONE giant box with thick black lines.
+    Row 1: Guest (Left) | Hotel (Right)
+    Row 2: Room (Full Width)
     """
     
-    # Left Column Data (Guest Info Only)
+    # Left Column Data (Guest Info)
     g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
     t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
     t_guest.setStyle(TableStyle([
         ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
     
-    # Right Column Data (Hotel Info Only)
+    # Right Column Data (Hotel Info)
     h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
     t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
     t_hotel.setStyle(TableStyle([
         ("SPAN", (0, 0), (-1, 0)), ("ALIGN", (0, 0), (-1, 0), "LEFT"),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # Bottom Row Data (Room Info - expanded with Conf, Meal, Nights)
-    # We use a 3-column layout for room info to save space if needed, or 1 wide table
-    r_data = [["ROOM INFORMATION", "", ""]]; 
-    # Flatten room rows into triplets if possible or just list them
-    # Let's just use standard key-value pairs but use 3 columns to save height
-    # Key, Value, Key, Value ? No, simple 2 col is safer for variable length text
-    # Let's stick to 2 columns spanning full width
+    # Bottom Row Data (Room Info - Full Width)
     r_data_formatted = [["ROOM INFORMATION", ""]] + room_rows
     t_room = Table(r_data_formatted, colWidths=[90, w - 110])
     t_room.setStyle(TableStyle([
@@ -283,9 +281,7 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # Master Table: 
-    # Row 0: Guest | Hotel
-    # Row 1: Room (Span 2)
+    # Master Table
     master_data = [[t_guest, t_hotel], [t_room, ""]]
     
     master_table = Table(master_data, colWidths=[w/2, w/2])
@@ -307,10 +303,12 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # Dynamic height based on scale_factor to fit 1 page
-    img_h = 90 * scale_factor
-    gap = 10 * scale_factor
+    # Only 1 point gap, max width
+    gap = 1 * scale_factor 
     img_w = (w - (2 * gap)) / 3
+    
+    # Increase height to 110 to make them BIG
+    img_h = 110 * scale_factor 
     
     total_w = (img_w * len(valid[:3])) + (gap * (len(valid[:3]) - 1))
     ix = x + (w - total_w) / 2
@@ -370,7 +368,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
     
     # Styles
     addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=7.5, leading=9, fontName="Helvetica-Bold", textColor=black)
-    remark_style = ParagraphStyle("remark", parent=styles["Normal"], fontSize=9, leading=11, fontName="Helvetica", textColor=black)
+    remark_style = ParagraphStyle("remark", parent=styles["Normal"], fontSize=7.5, leading=9, fontName="Helvetica-Bold", textColor=black)
 
     for idx, room in enumerate(rooms_list):
         if idx > 0: c.showPage()
@@ -382,15 +380,18 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # --- PREPARE DATA ---
         guest_p = Paragraph(room["guest"], addr_style)
         room_p = Paragraph(data["room_type"], addr_style)
-        
-        # Guest Info (Stripped down)
+        remarks_val = data["remarks"] if data["remarks"] else "N/A"
+        remarks_p = Paragraph(remarks_val, remark_style)
+
+        # Guest Info
         guest_rows = [
             ["Guest Name:", guest_p],
             ["No. of Pax:", f'{data["adults"]} Adults'],
-            ["Cancellation:", data["cancellation"]]
+            ["Cancellation:", data["cancellation"]],
+            ["Remarks:", remarks_p]
         ]
         
-        # Hotel Info (Stripped down)
+        # Hotel Info
         addr_str = f"{hotel_info.get('addr1','')}\n{hotel_info.get('addr2','')}".strip()
         addr_para = Paragraph(addr_str.replace('\n', '<br/>'), addr_style)
         hotel_name_p = Paragraph(data["hotel"], addr_style)
@@ -402,7 +403,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Voucher Date:", datetime.now().strftime("%d %b %Y")]
         ]
         
-        # Room Info (Moved Meal/Nights/Conf here)
+        # Room Info (Expanded with Meal, Conf, Nights)
         room_rows = [
             ["Room Type:", room_p],
             ["Room Size:", data["room_size"] or "N/A"],
@@ -412,22 +413,17 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         ]
 
         # --- AUTO-FIT LOGIC ---
-        # We try standard size. If y goes below limit, we enable "shrink mode"
         scale = 1.0
         tnc_font = 7
-        
-        # Dry Run Height Calculation (approx)
-        # Header (40) + Box (approx 200) + Images (105) + Policy (80) + Remarks (variable) + TNC (150)
-        # If content > available height (~700), shrink images and TNC.
         
         # 2. MEGA BOX
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
         
-        # Check space remaining
+        # Check space left for images + policy + TNC + footer
+        # Images (~110) + Policy (~80) + TNC (~120) = ~310 minimum needed
         space_left = y - MIN_CONTENT_Y
         
-        # If space is tight (< 350 pts), shrink images and TNC
-        if space_left < 350:
+        if space_left < 320:
             scale = 0.8 # Shrink images
             tnc_font = 6 # Shrink text
             
@@ -439,21 +435,19 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10.6); c.drawString(left, y, "HOTEL POLICIES"); y -= 10
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
+        
+        # If policy barely fits, shrink TNC more to prevent page break
+        if y - ph < MIN_CONTENT_Y: 
+            tnc_font = 5.5 
+        
         pt.drawOn(c, left, y - ph); y -= (ph + 15)
         
-        # 5. REMARKS
-        if data["remarks"]:
-            c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "REMARKS"); y -= 10
-            p_remark = Paragraph(data["remarks"], remark_style)
-            rw, rh = p_remark.wrapOn(c, content_w, 9999)
-            p_remark.drawOn(c, left, y - rh); y -= (rh + 15)
-
-        # 6. TNC (Auto-Fit)
+        # 5. TNC (Auto-Fit)
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
         lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
         
-        # Check if we need to super-shrink
-        if y - MIN_CONTENT_Y < 120: tnc_font = 5.5
+        # Force fit TNC if space is tight but exists
+        if y - MIN_CONTENT_Y < 120: tnc_font = 5
             
         tnc = _build_tnc_table(content_w, lead_guest, tnc_font)
         _, th = tnc.wrapOn(c, content_w, 9999)
