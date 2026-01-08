@@ -59,13 +59,12 @@ def init_state():
         'room_size': '',
         'remarks': '',
         'room_final': '',
-        'mode_selection': 'Manual' # Track mode state
+        'mode_selection': 'Manual'
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
             
-    # Initialize dynamic room keys
     for i in range(50):
         if f'room_{i}_guest' not in st.session_state: st.session_state[f'room_{i}_guest'] = ''
         if f'room_{i}_conf' not in st.session_state: st.session_state[f'room_{i}_conf'] = ''
@@ -89,6 +88,12 @@ def parse_smart_date(date_str):
         except ValueError: continue
     return None
 
+# --- RESTORED MISSING FUNCTION ---
+def clean_extracted_text(text):
+    """Cleans up text extracted from PDF/AI."""
+    if not isinstance(text, str): return str(text)
+    return text.strip().replace("\n", " ").replace("  ", " ")
+
 def clean_room_type_string(raw_type):
     if not isinstance(raw_type, str): return str(raw_type)
     if raw_type.strip().startswith(('{', '[')) and raw_type.strip().endswith(('}', ']')):
@@ -104,7 +109,6 @@ def clean_room_type_string(raw_type):
 # =====================================
 
 def extract_pdf_data(pdf_file):
-    """Restored & Improved PDF Extraction"""
     if not GEMINI_KEY: return None
     try:
         pdf_reader = pypdf.PdfReader(pdf_file)
@@ -114,10 +118,9 @@ def extract_pdf_data(pdf_file):
         prompt = f"""You are a Hotel Voucher Parser. Extract details from this text.
         
         CRITICAL RULES:
-        1. "rooms": Extract a list. For each room, find 'guest_name', 'confirmation_no' (look for 'Conf:', 'Res No:', 'Booking Ref:'), 'adults' (int), and 'children' (int).
+        1. "rooms": Extract a list. For each room, find 'guest_name', 'confirmation_no', 'adults' (int), and 'children' (int).
         2. IF "children" count is not explicit, assume 0.
         3. IF "confirmation_no" is missing, return empty string "".
-        4. Dates: Return as strings like "01 Jan 2024".
         
         Text content:
         {text[:25000]}
@@ -133,7 +136,6 @@ def extract_pdf_data(pdf_file):
         }}"""
         
         raw = model.generate_content(prompt).text
-        # Clean markdown
         clean_json = raw.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
@@ -148,7 +150,6 @@ def fetch_hotel_details_text(hotel, city, r_type):
     except: return {}
 
 def fetch_hotel_data_callback():
-    """Callback to populate data immediately upon selection."""
     selected_hotel = st.session_state.selected_hotel_key
     if not selected_hotel: return
     
@@ -169,23 +170,32 @@ def fetch_hotel_data_callback():
             st.session_state.fetched_room_types = ["Standard", "Deluxe"]
 
     base_q = f"{selected_hotel} {st.session_state.city}"
+    # Calls fetch_image directly here, but also ensures fallback if needed
     st.session_state.hotel_images = [
         fetch_image(f"{base_q} hotel exterior"),
         fetch_image(f"{base_q} hotel lobby"),
         fetch_image(f"{base_q} hotel room")
     ]
 
+# --- RESTORED MISSING FUNCTION ---
+def get_smart_images(hotel, city):
+    """Fallback function to get images if they weren't loaded earlier."""
+    base_q = f"{hotel} {city}"
+    return [
+        fetch_image(f"{base_q} hotel exterior"),
+        fetch_image(f"{base_q} hotel lobby"),
+        fetch_image(f"{base_q} hotel room")
+    ]
+
 def google_search(query, num=5):
-    if not SEARCH_KEY or not SEARCH_CX:
-        return []
+    if not SEARCH_KEY or not SEARCH_CX: return []
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200: return []
         return res.json().get("items", [])
-    except Exception:
-        return []
+    except: return []
 
 def find_hotel_options(keyword):
     if not keyword: return []
@@ -202,6 +212,13 @@ def fetch_image(query):
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
                            params={"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
         return res.json().get("items", [{}])[0].get("link")
+    except: return None
+
+def get_img_reader(url):
+    if not url: return None
+    try:
+        r = requests.get(url, timeout=4)
+        if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
     except: return None
 
 # =====================================
@@ -337,19 +354,15 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
     w, h = A4
     left = 40; right = w - 40; top = h - 40; content_w = right - left
     styles = getSampleStyleSheet()
-    
-    # Styles
     addr_style = ParagraphStyle("addr", parent=styles["Normal"], fontSize=7.5, leading=9, fontName="Helvetica-Bold", textColor=black)
     remark_style = ParagraphStyle("remark", parent=styles["Normal"], fontSize=7.5, leading=9, fontName="Helvetica-Bold", textColor=black)
 
     for idx, room in enumerate(rooms_list):
         if idx > 0: c.showPage()
         
-        # --- 1. HEADER ---
         y = top
         y = _draw_header(c, w, y)
 
-        # --- PREPARE DATA ---
         guest_p = Paragraph(room["guest"], addr_style)
         room_p = Paragraph(data["room_type"], addr_style)
         remarks_val = data["remarks"] if data["remarks"] else "N/A"
@@ -359,7 +372,6 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         if room["children"] > 0:
             pax_str += f', {room["children"]} Children'
 
-        # Guest Info
         guest_rows = [
             ["Guest Name:", guest_p],
             ["No. of Pax:", pax_str],
@@ -367,7 +379,6 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Remarks:", remarks_p]
         ]
         
-        # Hotel Info
         addr_str = f"{hotel_info.get('addr1','')}\n{hotel_info.get('addr2','')}".strip()
         addr_para = Paragraph(addr_str.replace('\n', '<br/>'), addr_style)
         hotel_name_p = Paragraph(data["hotel"], addr_style)
@@ -378,7 +389,6 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Check-Out:", data["checkout"].strftime("%d %b %Y")],
         ]
         
-        # Room Info
         room_rows = [
             ["Room Type:", room_p],
             ["Room Size:", data["room_size"] or "N/A"],
@@ -387,10 +397,8 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["No. of Nights:", str(data["nights"])],
         ]
 
-        # --- AUTO-FIT LOGIC ---
         scale = 1.0
         tnc_font = 7
-        
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
         space_left = y - MIN_CONTENT_Y
         
@@ -436,7 +444,6 @@ if st.button("🔄 Reset"):
     st.session_state["search_query"] = ""
     st.rerun()
 
-# Smart Getter for CSV columns
 def smart_get_col(row, possibilities, default_val=""):
     row_keys_norm = {k.strip().lower(): k for k in row.keys()}
     for p in possibilities:
@@ -454,7 +461,6 @@ with st.expander("📤 Upload PDF (Voucher Extraction)", expanded=True):
         with st.spinner("Analyzing PDF..."):
             parsed = extract_pdf_data(up_file)
             if parsed:
-                # Update Session State
                 st.session_state.hotel_name = parsed.get("hotel_name", "")
                 st.session_state.city = parsed.get("city", "")
                 d_in = parse_smart_date(parsed.get("checkin_raw"))
@@ -465,7 +471,6 @@ with st.expander("📤 Upload PDF (Voucher Extraction)", expanded=True):
                 st.session_state.ai_room_str = clean_extracted_text(parsed.get("room_type", ""))
                 st.session_state.room_size = parsed.get("room_size", "")
                 
-                # --- HYBRID: POPULATE BULK GRID ---
                 extracted_rooms = []
                 for r in parsed.get("rooms", []):
                     extracted_rooms.append({
