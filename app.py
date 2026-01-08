@@ -36,7 +36,6 @@ try:
     SEARCH_CX = st.secrets["SEARCH_ENGINE_ID"]
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
-    # Fail silently to allow local development
     GEMINI_KEY = None
     SEARCH_KEY = None
     SEARCH_CX = None
@@ -59,7 +58,8 @@ def init_state():
         'selected_hotel_key': None,
         'room_size': '',
         'remarks': '',
-        'room_final': '' 
+        'room_final': '',
+        'mode_selection': 'Manual' # Track mode state
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -103,40 +103,42 @@ def clean_room_type_string(raw_type):
 # 4) AI & SEARCH FUNCTIONS
 # =====================================
 
-def get_hotel_suggestions(query):
-    if not GEMINI_KEY: return []
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    try:
-        res = model.generate_content(f'Return JSON list of 3 official hotel names for: "{query}". JSON ONLY: ["Name 1", "Name 2"]').text
-        return json.loads(res.replace("```json", "").replace("```", "").strip())
-    except: return []
-
-def detect_city(hotel_name):
-    if not GEMINI_KEY: return ""
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    try: return model.generate_content(f'What city is "{hotel_name}" in? Return ONLY city name string.').text.strip()
-    except: return ""
-
-def get_room_types(hotel_name):
-    if not GEMINI_KEY: return []
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    try:
-        res = model.generate_content(f'List 10 room names for "{hotel_name}". Return JSON list strings.').text
-        return json.loads(res.replace("```json", "").replace("```", "").strip())
-    except: return []
-
 def extract_pdf_data(pdf_file):
+    """Restored & Improved PDF Extraction"""
     if not GEMINI_KEY: return None
     try:
         pdf_reader = pypdf.PdfReader(pdf_file)
         text = "\n".join([p.extract_text() for p in pdf_reader.pages])
         model = genai.GenerativeModel('gemini-2.0-flash')
-        prompt = f"""Extract booking details. CRITICAL: Return DATES as they appear. Look for 'Room 1', 'Room 2'.
-        Text Snippet: {text[:25000]}
-        Return JSON: {{ "hotel_name": "Name", "city": "City", "checkin_raw": "String", "checkout_raw": "String", "meal_plan": "Plan", "is_refundable": true/false, "cancel_deadline_raw": "String", "room_size": "String", "rooms": [ {{"guest_name": "G1", "confirmation_no": "C1", "room_type": "T1", "adults": 2}} ] }}"""
+        
+        prompt = f"""You are a Hotel Voucher Parser. Extract details from this text.
+        
+        CRITICAL RULES:
+        1. "rooms": Extract a list. For each room, find 'guest_name', 'confirmation_no' (look for 'Conf:', 'Res No:', 'Booking Ref:'), 'adults' (int), and 'children' (int).
+        2. IF "children" count is not explicit, assume 0.
+        3. IF "confirmation_no" is missing, return empty string "".
+        4. Dates: Return as strings like "01 Jan 2024".
+        
+        Text content:
+        {text[:25000]}
+        
+        Return JSON ONLY: 
+        {{ 
+            "hotel_name": "Name", "city": "City", 
+            "checkin_raw": "DateStr", "checkout_raw": "DateStr", 
+            "meal_plan": "Plan", "room_type": "Type", "room_size": "Size",
+            "rooms": [ 
+                {{"guest_name": "Name", "confirmation_no": "12345", "adults": 2, "children": 0}} 
+            ] 
+        }}"""
+        
         raw = model.generate_content(prompt).text
-        return json.loads(raw.replace("```json", "").replace("```", "").strip())
-    except: return None
+        # Clean markdown
+        clean_json = raw.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_json)
+    except Exception as e:
+        print(f"PDF Error: {e}")
+        return None
 
 def fetch_hotel_details_text(hotel, city, r_type):
     if not GEMINI_KEY: return {}
@@ -174,14 +176,16 @@ def fetch_hotel_data_callback():
     ]
 
 def google_search(query, num=5):
-    if not SEARCH_KEY or not SEARCH_CX: return []
+    if not SEARCH_KEY or not SEARCH_CX:
+        return []
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200: return []
         return res.json().get("items", [])
-    except: return []
+    except Exception:
+        return []
 
 def find_hotel_options(keyword):
     if not keyword: return []
@@ -200,29 +204,18 @@ def fetch_image(query):
         return res.json().get("items", [{}])[0].get("link")
     except: return None
 
-def get_img_reader(url):
-    if not url: return None
-    try:
-        r = requests.get(url, timeout=4)
-        if r.status_code == 200: return ImageReader(io.BytesIO(r.content))
-    except: return None
-
 # =====================================
 # 5) PDF GENERATION
 # =====================================
 
 def draw_vector_seal(c, x, y):
-    """Draws the official Odaduu Seal."""
     c.saveState()
     c.setStrokeColor(BRAND_BLUE); c.setFillColor(BRAND_BLUE); c.setFillAlpha(0.9); c.setLineWidth(1.5)
-    
     cx, cy = x + 40, y + 40
     c.circle(cx, cy, 40, stroke=1, fill=0)
     c.setLineWidth(0.5); c.circle(cx, cy, 36, stroke=1, fill=0)
-    
     c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx, cy + 4, "ODADUU")
     c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx, cy - 6, "TRAVEL DMC")
-    
     c.setFont("Helvetica-Bold", 6)
     text_top = "CERTIFIED VOUCHER"; angle_start = 140
     for i, char in enumerate(text_top):
@@ -242,14 +235,11 @@ def _draw_header(c, w, y_top):
         c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
-    
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
 def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
-    """Draws ONE giant box with thick black lines."""
-    
     g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
     t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
     t_guest.setStyle(TableStyle([
@@ -258,7 +248,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
-    
     h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
     t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
     t_hotel.setStyle(TableStyle([
@@ -267,7 +256,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
-
     r_data_formatted = [["ROOM INFORMATION", ""]] + room_rows
     t_room = Table(r_data_formatted, colWidths=[90, w - 110])
     t_room.setStyle(TableStyle([
@@ -276,9 +264,7 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("TEXTCOLOR", (0, 0), (-1, 0), BRAND_BLUE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
-
     master_data = [[t_guest, t_hotel], [t_room, ""]]
-    
     master_table = Table(master_data, colWidths=[w/2, w/2])
     master_table.setStyle(TableStyle([
         ("SPAN", (0, 1), (1, 1)), # Span Room
@@ -289,7 +275,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
-    
     tw, th = master_table.wrapOn(c, w, 9999)
     master_table.drawOn(c, x, y - th)
     return y - th - 15
@@ -297,17 +282,14 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
 def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
-
     gap = 0.75 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     img_h = 100 * scale_factor 
-    
     for i in range(min(3, len(valid))):
         im = valid[i]
         curr_x = x + (i * (img_w + gap))
         try: c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
         except: pass
-        
     return y - img_h - (10 * scale_factor)
 
 def _build_policy_table(w):
@@ -373,7 +355,6 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         remarks_val = data["remarks"] if data["remarks"] else "N/A"
         remarks_p = Paragraph(remarks_val, remark_style)
 
-        # Format Pax String
         pax_str = f'{room["adults"]} Adults'
         if room["children"] > 0:
             pax_str += f', {room["children"]} Children'
@@ -410,20 +391,15 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         scale = 1.0
         tnc_font = 7
         
-        # 2. MEGA BOX
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
-        
-        # Check space
         space_left = y - MIN_CONTENT_Y
         
         if space_left < 320:
-            scale = 0.8 # Shrink images
-            tnc_font = 6 # Shrink text
+            scale = 0.8
+            tnc_font = 6
             
-        # 3. IMAGES
         y = _draw_image_row(c, left, y, content_w, imgs, scale)
 
-        # 4. POLICY
         y -= 8
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10.6); c.drawString(left, y, "HOTEL POLICIES"); y -= 10
         pt = _build_policy_table(content_w)
@@ -432,7 +408,6 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             tnc_font = 5.5 
         pt.drawOn(c, left, y - ph); y -= (ph + 12)
         
-        # 5. TNC
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
         lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
         
@@ -442,7 +417,6 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         _, th = tnc.wrapOn(c, content_w, 9999)
         tnc.drawOn(c, left, y - th)
 
-        # Footer
         draw_vector_seal(c, w - 130, 45)
         c.setStrokeColor(BRAND_ORANGE); c.setLineWidth(2); c.line(0, FOOTER_LINE_Y, w, FOOTER_LINE_Y)
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 8)
@@ -457,11 +431,8 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
 # =====================================
 st.title("🌏 Odaduu Voucher Generator")
 
-# --- FIXED RESET BUTTON ---
 if st.button("🔄 Reset"):
-    # Clear session keys completely
     st.session_state.clear()
-    # Force text input default by setting key to empty string explicitly
     st.session_state["search_query"] = ""
     st.rerun()
 
@@ -476,12 +447,14 @@ def smart_get_col(row, possibilities, default_val=""):
                 return val
     return default_val
 
-with st.expander("📤 Upload PDF", expanded=True):
+# --- PDF UPLOADER RESTORED ---
+with st.expander("📤 Upload PDF (Voucher Extraction)", expanded=True):
     up_file = st.file_uploader("PDF", type="pdf")
     if up_file and st.session_state.last_uploaded_file != up_file.name:
-        with st.spinner("Processing..."):
+        with st.spinner("Analyzing PDF..."):
             parsed = extract_pdf_data(up_file)
             if parsed:
+                # Update Session State
                 st.session_state.hotel_name = parsed.get("hotel_name", "")
                 st.session_state.city = parsed.get("city", "")
                 d_in = parse_smart_date(parsed.get("checkin_raw"))
@@ -492,24 +465,28 @@ with st.expander("📤 Upload PDF", expanded=True):
                 st.session_state.ai_room_str = clean_extracted_text(parsed.get("room_type", ""))
                 st.session_state.room_size = parsed.get("room_size", "")
                 
-                rooms = parsed.get("rooms", [])
-                if rooms:
-                    st.session_state.num_rooms = len(rooms)
-                    for i, r in enumerate(rooms):
-                        st.session_state[f"room_{i}_conf"] = str(r.get("confirmation_no", ""))
-                        st.session_state[f"room_{i}_guest"] = str(r.get("guest_name", ""))
-                        st.session_state[f"room_{i}_adults"] = int(r.get("adults", 2))
+                # --- HYBRID: POPULATE BULK GRID ---
+                extracted_rooms = []
+                for r in parsed.get("rooms", []):
+                    extracted_rooms.append({
+                        "Guest Name": r.get("guest_name", ""),
+                        "Confirmation No": r.get("confirmation_no", ""),
+                        "Adults": int(r.get("adults", 2)),
+                        "Children": int(r.get("children", 0))
+                    })
+                
+                st.session_state.bulk_data = extracted_rooms
+                st.session_state.mode_selection = "Bulk" # Force switch to Bulk mode
                 
                 if st.session_state.hotel_name:
                     fetch_hotel_data_callback() 
 
                 st.session_state.last_uploaded_file = up_file.name
-                st.success("Loaded!")
+                st.success("PDF Data Extracted! Review below in 'Bulk' mode.")
                 st.rerun()
 
 c1, c2 = st.columns(2)
 with c1:
-    # Key added to text_input to allow reset
     q = st.text_input("Search Hotel", key="search_query")
     if st.button("🔎 Search"):
         if not q:
@@ -518,12 +495,11 @@ with c1:
             with st.spinner("Searching..."):
                 found = find_hotel_options(q)
                 if not found:
-                    st.error("No results found. Try a different keyword.")
+                    st.error("No results found.")
                 else:
-                    # --- AUTO-SELECT LOGIC ---
                     st.session_state.found_hotels = found
-                    st.session_state.selected_hotel_key = found[0] # Select Top Option
-                    fetch_hotel_data_callback() # Fetch data immediately
+                    st.session_state.selected_hotel_key = found[0]
+                    fetch_hotel_data_callback() 
                     st.rerun()
     
     if st.session_state.found_hotels:
@@ -538,7 +514,7 @@ with c1:
     st.text_input("City", key="city")
     
     # MODE SELECTION
-    mode = st.radio("Mode", ["Manual", "Bulk"])
+    mode = st.radio("Mode", ["Manual", "Bulk"], key="mode_selection")
     
     if mode == "Manual":
         n = st.number_input("Rooms", 1, 50, key="num_rooms")
@@ -561,21 +537,17 @@ with c1:
         f = st.file_uploader("CSV", type="csv")
         if f:
             try:
-                df = pd.read_csv(f, encoding='utf-8-sig') # Try UTF-8-SIG first (Excel standard)
+                df = pd.read_csv(f, encoding='utf-8-sig') 
             except:
                 f.seek(0)
-                df = pd.read_csv(f, encoding='latin-1') # Fallback
+                df = pd.read_csv(f, encoding='latin-1')
             
-            # --- PRE-PROCESS TO STANDARDIZE COLUMNS ---
+            # --- PRE-PROCESS ---
             processed_data = []
             for _, row in df.iterrows():
-                # Guest Name
                 g_name = smart_get_col(row, ["Guest Name", "Guests", "Guest", "Name", "Guest_Name"])
-                
-                # Confirmation No
                 c_no = smart_get_col(row, ["Confirmation No", "Confirmation", "Conf", "Conf_No", "Booking Ref", "Room_No"])
                 
-                # Adults
                 adt_raw = smart_get_col(row, ["Adults", "Adult", "adults", "ADT", "Adt"])
                 if str(adt_raw) != "":
                     try: adt = int(adt_raw)
@@ -583,7 +555,6 @@ with c1:
                 else:
                     adt = len(str(g_name).split(',')) if g_name else 2
                 
-                # Children
                 chd_raw = smart_get_col(row, ["Children", "Child", "children", "child", "Kids", "kids", "CHD", "Chd"])
                 try: chd = int(chd_raw) if str(chd_raw) != "" else 0
                 except: chd = 0
@@ -594,10 +565,16 @@ with c1:
                     "Adults": adt,
                     "Children": chd
                 })
+            st.session_state.bulk_data = processed_data # Load from CSV
             
-            st.info("👇 PLEASE EDIT THIS TABLE: Correct any missing Adults, Children or Conf Nos here.")
-            edited_df = st.data_editor(pd.DataFrame(processed_data), num_rows="dynamic", use_container_width=True)
+        st.info("👇 PLEASE EDIT THIS TABLE: Correct any missing Adults, Children or Conf Nos here.")
+        
+        # Display Grid if data exists (from PDF or CSV)
+        if st.session_state.bulk_data:
+            edited_df = st.data_editor(pd.DataFrame(st.session_state.bulk_data), num_rows="dynamic", use_container_width=True)
             st.session_state.bulk_data = edited_df.to_dict("records")
+        else:
+            st.warning("No data yet. Upload CSV or PDF to populate.")
 
 with c2:
     if st.session_state.checkout <= st.session_state.checkin: st.session_state.checkout = st.session_state.checkin + timedelta(days=1)
