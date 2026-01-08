@@ -59,7 +59,8 @@ def init_state():
         'room_size': '',
         'remarks': '',
         'room_final': '',
-        'mode_selection': 'Manual'
+        'mode_selection': 'Manual',
+        'uploader_key': 0 # Dynamic key for hard reset
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -291,7 +292,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
     master_table.drawOn(c, x, y - th)
     return y - th - 15
 
-# --- FIXED IMAGE ROW WITH UNIFORM SIZE ---
 def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
@@ -303,9 +303,7 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     for i in range(min(3, len(valid))):
         im = valid[i]
         curr_x = x + (i * (img_w + gap))
-        try: 
-            # preserveAspectRatio=False ensures identical size
-            c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=False, anchor='c')
+        try: c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=False, anchor='c')
         except: pass
         
     return y - img_h - (10 * scale_factor)
@@ -440,9 +438,12 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
 # =====================================
 st.title("🌏 Odaduu Voucher Generator")
 
+# --- FIXED HARD RESET BUTTON ---
 if st.button("🔄 Reset"):
+    old_key = st.session_state.get("uploader_key", 0)
     st.session_state.clear()
     st.session_state["search_query"] = ""
+    st.session_state["uploader_key"] = old_key + 1 # Increment to force re-render
     st.rerun()
 
 def smart_get_col(row, possibilities, default_val=""):
@@ -455,9 +456,12 @@ def smart_get_col(row, possibilities, default_val=""):
                 return val
     return default_val
 
-# --- PDF UPLOADER RESTORED ---
+# --- PDF UPLOADER WITH DYNAMIC KEY ---
 with st.expander("📤 Upload PDF (Voucher Extraction)", expanded=True):
-    up_file = st.file_uploader("PDF", type="pdf")
+    # Dynamic key ensures this widget is destroyed/recreated on reset
+    dynamic_key = f"pdf_uploader_{st.session_state.get('uploader_key', 0)}"
+    up_file = st.file_uploader("PDF", type="pdf", key=dynamic_key)
+    
     if up_file and st.session_state.last_uploaded_file != up_file.name:
         with st.spinner("Analyzing PDF..."):
             parsed = extract_pdf_data(up_file)
