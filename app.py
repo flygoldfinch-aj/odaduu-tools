@@ -36,7 +36,6 @@ try:
     SEARCH_CX = st.secrets["SEARCH_ENGINE_ID"]
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
-    # Fail silently/gracefully if secrets are missing to allow local dev without crash
     GEMINI_KEY = None
     SEARCH_KEY = None
     SEARCH_CX = None
@@ -175,14 +174,12 @@ def fetch_hotel_data_callback():
 
 def google_search(query, num=5):
     if not SEARCH_KEY or not SEARCH_CX:
-        # Avoid error if keys not set in local env
         return []
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
         res = requests.get(url, params=params, timeout=5)
-        if res.status_code != 200:
-            return []
+        if res.status_code != 200: return []
         return res.json().get("items", [])
     except Exception:
         return []
@@ -241,12 +238,14 @@ def draw_vector_seal(c, x, y):
     c.restoreState()
 
 def _draw_header(c, w, y_top):
+    # Centered Logo
     logo_w, logo_h = 140, 55
     try: 
         c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
     
+    # Centered Title
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
@@ -429,7 +428,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # 2. MEGA BOX
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
         
-        # Check space
+        # Check space left for images + policy + TNC + footer
         space_left = y - MIN_CONTENT_Y
         
         if space_left < 320:
@@ -475,15 +474,14 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
 # =====================================
 st.title("🌏 Odaduu Voucher Generator")
 
+# --- RESET BUTTON (UPDATED) ---
 if st.button("🔄 Reset"):
-    for k in list(st.session_state.keys()): del st.session_state[k]
+    st.session_state.clear() # Completely wipes all session state
     st.rerun()
 
-# Helper for Smart Mapping (Case Insensitive + variations)
+# Smart Getter for CSV columns
 def smart_get_col(row, possibilities, default_val=""):
-    # Normalize row keys
     row_keys_norm = {k.strip().lower(): k for k in row.keys()}
-    
     for p in possibilities:
         p_norm = p.strip().lower()
         if p_norm in row_keys_norm:
@@ -525,17 +523,20 @@ with st.expander("📤 Upload PDF", expanded=True):
 
 c1, c2 = st.columns(2)
 with c1:
-    q = st.text_input("Search Hotel")
+    q = st.text_input("Search Hotel", key="search_query") # Added Key to enable clearing
     if st.button("🔎 Search"):
         if not q:
             st.warning("Please enter a hotel name.")
         else:
             with st.spinner("Searching..."):
                 found = find_hotel_options(q)
-                st.session_state.found_hotels = found
                 if not found:
                     st.error("No results found. Try a different keyword.")
                 else:
+                    # --- AUTO-SELECT LOGIC ---
+                    st.session_state.found_hotels = found
+                    st.session_state.selected_hotel_key = found[0] # Select Top Option
+                    fetch_hotel_data_callback() # Fetch data immediately
                     st.rerun()
     
     if st.session_state.found_hotels:
@@ -572,7 +573,11 @@ with c1:
         # --- BULK MODE WITH EDITABLE GRID ---
         f = st.file_uploader("CSV", type="csv")
         if f:
-            df = pd.read_csv(f)
+            try:
+                df = pd.read_csv(f, encoding='utf-8-sig') # Try UTF-8-SIG first (Excel standard)
+            except:
+                f.seek(0)
+                df = pd.read_csv(f, encoding='latin-1') # Fallback
             
             # --- PRE-PROCESS TO STANDARDIZE COLUMNS ---
             processed_data = []
@@ -580,12 +585,12 @@ with c1:
                 # Guest Name
                 g_name = smart_get_col(row, ["Guest Name", "Guests", "Guest", "Name", "Guest_Name"])
                 
-                # Confirmation No (REMOVED 'Room_No' from here to fix bug)
-                c_no = smart_get_col(row, ["Confirmation No", "Confirmation", "Conf", "Conf_No", "Booking Ref"])
+                # Confirmation No
+                c_no = smart_get_col(row, ["Confirmation No", "Confirmation", "Conf", "Conf_No", "Booking Ref", "Room_No"])
                 
-                # Adults (Calculate if missing)
+                # Adults
                 adt_raw = smart_get_col(row, ["Adults", "Adult", "adults", "ADT", "Adt"])
-                if adt_raw != "":
+                if str(adt_raw) != "":
                     try: adt = int(adt_raw)
                     except: adt = 2
                 else:
@@ -593,7 +598,7 @@ with c1:
                 
                 # Children
                 chd_raw = smart_get_col(row, ["Children", "Child", "children", "child", "Kids", "kids", "CHD", "Chd"])
-                try: chd = int(chd_raw) if chd_raw != "" else 0
+                try: chd = int(chd_raw) if str(chd_raw) != "" else 0
                 except: chd = 0
                 
                 processed_data.append({
@@ -603,9 +608,8 @@ with c1:
                     "Children": chd
                 })
             
-            # Show Editable Grid
-            st.info("👇 Edit data below if needed (e.g. fix Pax counts or Conf Nos)")
-            edited_df = st.data_editor(pd.DataFrame(processed_data), num_rows="dynamic")
+            st.info("👇 PLEASE EDIT THIS TABLE: Correct any missing Adults, Children or Conf Nos here.")
+            edited_df = st.data_editor(pd.DataFrame(processed_data), num_rows="dynamic", use_container_width=True)
             st.session_state.bulk_data = edited_df.to_dict("records")
 
 with c2:
