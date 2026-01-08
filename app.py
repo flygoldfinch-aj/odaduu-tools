@@ -36,6 +36,7 @@ try:
     SEARCH_CX = st.secrets["SEARCH_ENGINE_ID"]
     genai.configure(api_key=GEMINI_KEY)
 except Exception:
+    # Fail silently to allow local development
     GEMINI_KEY = None
     SEARCH_KEY = None
     SEARCH_CX = None
@@ -173,16 +174,14 @@ def fetch_hotel_data_callback():
     ]
 
 def google_search(query, num=5):
-    if not SEARCH_KEY or not SEARCH_CX:
-        return []
+    if not SEARCH_KEY or not SEARCH_CX: return []
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "num": num}
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200: return []
         return res.json().get("items", [])
-    except Exception:
-        return []
+    except: return []
 
 def find_hotel_options(keyword):
     if not keyword: return []
@@ -238,27 +237,19 @@ def draw_vector_seal(c, x, y):
     c.restoreState()
 
 def _draw_header(c, w, y_top):
-    # Centered Logo
     logo_w, logo_h = 140, 55
     try: 
         c.drawImage(LOGO_FILE, (w - logo_w)/2, y_top - logo_h, logo_w, logo_h, mask='auto', preserveAspectRatio=True)
     except: 
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 24); c.drawCentredString(w / 2, y_top - 35, "ODADUU")
     
-    # Centered Title
     c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(w / 2, y_top - logo_h - 20, "HOTEL CONFIRMATION VOUCHER")
     return y_top - logo_h - 40
 
 def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
-    """
-    Draws ONE giant box with thick black lines containing two columns:
-    Left: Guest Info
-    Right: Hotel Details
-    Bottom: Room Info (including Conf No, Meal, Nights)
-    """
+    """Draws ONE giant box with thick black lines."""
     
-    # Left Column Data (Guest Info)
     g_data = [["GUEST INFORMATION", ""]]; g_data.extend(guest_rows)
     t_guest = Table(g_data, colWidths=[90, (w/2) - 100])
     t_guest.setStyle(TableStyle([
@@ -268,7 +259,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
     
-    # Right Column Data (Hotel Info)
     h_data = [["HOTEL DETAILS", ""]]; h_data.extend(hotel_rows)
     t_hotel = Table(h_data, colWidths=[70, (w/2) - 80])
     t_hotel.setStyle(TableStyle([
@@ -278,7 +268,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # Bottom Row Data (Room Info - Full Width)
     r_data_formatted = [["ROOM INFORMATION", ""]] + room_rows
     t_room = Table(r_data_formatted, colWidths=[90, w - 110])
     t_room.setStyle(TableStyle([
@@ -288,9 +277,6 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
         ("LEFTPADDING", (0,0), (-1,-1), 0),
     ]))
 
-    # Master Table: 
-    # Row 0: Guest | Hotel
-    # Row 1: Room (Span 2)
     master_data = [[t_guest, t_hotel], [t_room, ""]]
     
     master_table = Table(master_data, colWidths=[w/2, w/2])
@@ -312,10 +298,9 @@ def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
 
-    # GAP = 0.75
     gap = 0.75 * scale_factor 
     img_w = (w - (2 * gap)) / 3
-    img_h = 100 * scale_factor # Standard height
+    img_h = 100 * scale_factor 
     
     for i in range(min(3, len(valid))):
         im = valid[i]
@@ -401,7 +386,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Remarks:", remarks_p]
         ]
         
-        # Hotel Info (Removed Voucher Date)
+        # Hotel Info
         addr_str = f"{hotel_info.get('addr1','')}\n{hotel_info.get('addr2','')}".strip()
         addr_para = Paragraph(addr_str.replace('\n', '<br/>'), addr_style)
         hotel_name_p = Paragraph(data["hotel"], addr_style)
@@ -412,7 +397,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
             ["Check-Out:", data["checkout"].strftime("%d %b %Y")],
         ]
         
-        # Room Info (Expanded with Meal, Conf, Nights)
+        # Room Info
         room_rows = [
             ["Room Type:", room_p],
             ["Room Size:", data["room_size"] or "N/A"],
@@ -428,7 +413,7 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         # 2. MEGA BOX
         y = _draw_merged_info_box(c, left, y, content_w, guest_rows, hotel_rows, room_rows)
         
-        # Check space left for images + policy + TNC + footer
+        # Check space
         space_left = y - MIN_CONTENT_Y
         
         if space_left < 320:
@@ -444,15 +429,13 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
         pt = _build_policy_table(content_w)
         _, ph = pt.wrapOn(c, content_w, 9999)
         if y - ph < MIN_CONTENT_Y: 
-            # Force shrink TNC if Policy fits but barely
             tnc_font = 5.5 
         pt.drawOn(c, left, y - ph); y -= (ph + 12)
         
-        # 5. TNC (Auto-Fit)
+        # 5. TNC
         c.setFillColor(BRAND_BLUE); c.setFont("Helvetica-Bold", 10); c.drawString(left, y, "TERMS & CONDITIONS"); y -= 8
         lead_guest = room["guest"].split(',')[0] if room["guest"] else "Guest"
         
-        # Force fit TNC if space is tight but exists
         if y - MIN_CONTENT_Y < 120: tnc_font = 5
             
         tnc = _build_tnc_table(content_w, lead_guest, tnc_font)
@@ -474,9 +457,12 @@ def generate_pdf_final(data, hotel_info, rooms_list, imgs):
 # =====================================
 st.title("🌏 Odaduu Voucher Generator")
 
-# --- RESET BUTTON (UPDATED) ---
+# --- FIXED RESET BUTTON ---
 if st.button("🔄 Reset"):
-    st.session_state.clear() # Completely wipes all session state
+    # Clear session keys completely
+    st.session_state.clear()
+    # Force text input default by setting key to empty string explicitly
+    st.session_state["search_query"] = ""
     st.rerun()
 
 # Smart Getter for CSV columns
@@ -523,7 +509,8 @@ with st.expander("📤 Upload PDF", expanded=True):
 
 c1, c2 = st.columns(2)
 with c1:
-    q = st.text_input("Search Hotel", key="search_query") # Added Key to enable clearing
+    # Key added to text_input to allow reset
+    q = st.text_input("Search Hotel", key="search_query")
     if st.button("🔎 Search"):
         if not q:
             st.warning("Please enter a hotel name.")
