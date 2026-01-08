@@ -88,9 +88,7 @@ def parse_smart_date(date_str):
         except ValueError: continue
     return None
 
-# --- RESTORED MISSING FUNCTION ---
 def clean_extracted_text(text):
-    """Cleans up text extracted from PDF/AI."""
     if not isinstance(text, str): return str(text)
     return text.strip().replace("\n", " ").replace("  ", " ")
 
@@ -170,16 +168,13 @@ def fetch_hotel_data_callback():
             st.session_state.fetched_room_types = ["Standard", "Deluxe"]
 
     base_q = f"{selected_hotel} {st.session_state.city}"
-    # Calls fetch_image directly here, but also ensures fallback if needed
     st.session_state.hotel_images = [
         fetch_image(f"{base_q} hotel exterior"),
         fetch_image(f"{base_q} hotel lobby"),
         fetch_image(f"{base_q} hotel room")
     ]
 
-# --- RESTORED MISSING FUNCTION ---
 def get_smart_images(hotel, city):
-    """Fallback function to get images if they weren't loaded earlier."""
     base_q = f"{hotel} {city}"
     return [
         fetch_image(f"{base_q} hotel exterior"),
@@ -296,17 +291,23 @@ def _draw_merged_info_box(c, x, y, w, guest_rows, hotel_rows, room_rows):
     master_table.drawOn(c, x, y - th)
     return y - th - 15
 
+# --- FIXED IMAGE ROW WITH UNIFORM SIZE ---
 def _draw_image_row(c, x, y, w, imgs, scale_factor=1.0):
     valid = [im for im in imgs if im]
     if not valid: return y
+
     gap = 0.75 * scale_factor 
     img_w = (w - (2 * gap)) / 3
     img_h = 100 * scale_factor 
+    
     for i in range(min(3, len(valid))):
         im = valid[i]
         curr_x = x + (i * (img_w + gap))
-        try: c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=True, anchor='c')
+        try: 
+            # preserveAspectRatio=False ensures identical size
+            c.drawImage(im, curr_x, y - img_h, img_w, img_h, preserveAspectRatio=False, anchor='c')
         except: pass
+        
     return y - img_h - (10 * scale_factor)
 
 def _build_policy_table(w):
@@ -481,7 +482,7 @@ with st.expander("📤 Upload PDF (Voucher Extraction)", expanded=True):
                     })
                 
                 st.session_state.bulk_data = extracted_rooms
-                st.session_state.mode_selection = "Bulk" # Force switch to Bulk mode
+                st.session_state.mode_selection = "Bulk" 
                 
                 if st.session_state.hotel_name:
                     fetch_hotel_data_callback() 
@@ -518,7 +519,6 @@ with c1:
     st.text_input("Hotel", key="hotel_name")
     st.text_input("City", key="city")
     
-    # MODE SELECTION
     mode = st.radio("Mode", ["Manual", "Bulk"], key="mode_selection")
     
     if mode == "Manual":
@@ -538,7 +538,6 @@ with c1:
             c_d.number_input("Chd", 0, 10, key=f"room_{i}_children")
             
     else:
-        # --- BULK MODE WITH EDITABLE GRID ---
         f = st.file_uploader("CSV", type="csv")
         if f:
             try:
@@ -547,7 +546,6 @@ with c1:
                 f.seek(0)
                 df = pd.read_csv(f, encoding='latin-1')
             
-            # --- PRE-PROCESS ---
             processed_data = []
             for _, row in df.iterrows():
                 g_name = smart_get_col(row, ["Guest Name", "Guests", "Guest", "Name", "Guest_Name"])
@@ -570,11 +568,10 @@ with c1:
                     "Adults": adt,
                     "Children": chd
                 })
-            st.session_state.bulk_data = processed_data # Load from CSV
+            st.session_state.bulk_data = processed_data 
             
         st.info("👇 PLEASE EDIT THIS TABLE: Correct any missing Adults, Children or Conf Nos here.")
         
-        # Display Grid if data exists (from PDF or CSV)
         if st.session_state.bulk_data:
             edited_df = st.data_editor(pd.DataFrame(st.session_state.bulk_data), num_rows="dynamic", use_container_width=True)
             st.session_state.bulk_data = edited_df.to_dict("records")
@@ -607,7 +604,6 @@ if st.button("Generate Voucher", type="primary"):
     with st.spinner("Processing..."):
         rooms = []
         
-        # --- GATHER DATA BASED ON MODE ---
         if mode == "Manual":
             mc = st.session_state.get("room_0_conf", "")
             for i in range(st.session_state.num_rooms):
@@ -623,7 +619,6 @@ if st.button("Generate Voucher", type="primary"):
                     "children": st.session_state.get(f"room_{i}_children", 0)
                 })
         else:
-            # Bulk Mode (Uses the Edited DF)
             if st.session_state.bulk_data:
                 for r in st.session_state.bulk_data:
                     rooms.append({
