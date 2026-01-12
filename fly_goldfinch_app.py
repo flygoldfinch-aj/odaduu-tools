@@ -149,7 +149,7 @@ def fetch_hotel_details_text(hotel, city, r_type):
     except: return {}
 
 def fetch_hotel_data_callback():
-    """Fetches City, Room Types (Smarter), and Images (Higher Quality)."""
+    """Fetches City, Room Types, and Images."""
     selected_hotel = st.session_state.selected_hotel_key
     if not selected_hotel: return
     
@@ -158,20 +158,9 @@ def fetch_hotel_data_callback():
     if GEMINI_KEY:
         model = genai.GenerativeModel('gemini-2.0-flash')
         try:
-            # 1. Smarter Room Type Search
             search_res = google_search(f"{selected_hotel} official site rooms accommodation")
             snippets = "\n".join([i.get('snippet','') for i in search_res])
-            
-            prompt = f"""Based on these search results for "{selected_hotel}":
-            {snippets}
-            
-            1. Identify the City.
-            2. List 3-5 official room categories. 
-               Format: "Room Name (Bed Type) - Size if found" (e.g. "Deluxe King - 40sqm")
-               If details are missing, just list "Room Name".
-            
-            Return JSON: {{ "city": "CityName", "rooms": ["Room A", "Room B"] }}"""
-            
+            prompt = f"""Based on these search results for "{selected_hotel}":\n{snippets}\n1. Identify the City.\n2. List 3-5 official room categories.\nReturn JSON: {{ "city": "CityName", "rooms": ["Room A", "Room B"] }}"""
             raw = model.generate_content(prompt).text
             data = json.loads(raw.replace("```json", "").replace("```", "").strip())
             st.session_state.city = data.get("city", "")
@@ -180,16 +169,14 @@ def fetch_hotel_data_callback():
             st.session_state.city = ""
             st.session_state.fetched_room_types = ["Standard", "Deluxe"]
 
-    # 2. High-Quality Image Fetching (Mimicking "Google Hotels" quality)
     base_q = f"{selected_hotel} {st.session_state.city}"
     st.session_state.hotel_images = [
-        fetch_image(f"{base_q} building exterior architecture daytime"), # Professional Exterior
-        fetch_image(f"{base_q} hotel lobby interior design luxury"),    # Professional Lobby
-        fetch_image(f"{base_q} guest room bedroom interior design")     # Professional Room
+        fetch_image(f"{base_q} building exterior architecture daytime"),
+        fetch_image(f"{base_q} hotel lobby interior design luxury"),
+        fetch_image(f"{base_q} guest room bedroom interior design")
     ]
 
 def get_smart_images(hotel, city):
-    """Fallback function to get images if they weren't loaded earlier."""
     base_q = f"{hotel} {city}"
     return [
         fetch_image(f"{base_q} building exterior architecture daytime"),
@@ -209,8 +196,6 @@ def google_search(query, num=5):
 
 def find_hotel_options(keyword):
     if not keyword: return []
-    # UPDATED SEARCH LOGIC: Supports Address or Name
-    # Appending "hotel official site" works for both "Hilton Tokyo" and "6-6-2 Nishi-Shinjuku"
     results = google_search(f"{keyword} hotel official site")
     hotels = []
     for item in results:
@@ -218,13 +203,32 @@ def find_hotel_options(keyword):
         if title and title not in hotels: hotels.append(title)
     return hotels[:5]
 
+# --- ROBUST IMAGE FETCHER ---
 def fetch_image(query):
     if not SEARCH_KEY or not SEARCH_CX: return None
     try:
-        # Optimized for high-res looking images
+        # Fetch 3 candidates to ensure at least one works
         res = requests.get("https://www.googleapis.com/customsearch/v1", 
-                           params={"q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, "searchType": "image", "num": 1, "imgSize": "large", "safe": "active"})
-        return res.json().get("items", [{}])[0].get("link")
+                           params={
+                               "q": query, "cx": SEARCH_CX, "key": SEARCH_KEY, 
+                               "searchType": "image", "num": 3, 
+                               "imgSize": "large", "safe": "active"
+                           })
+        items = res.json().get("items", [])
+        
+        for item in items:
+            link = item.get("link", "")
+            # Filter out WebP (breaks PDF)
+            if ".webp" in link.lower(): continue
+            
+            try:
+                # Verify link is alive
+                r = requests.get(link, timeout=2, stream=True)
+                if r.status_code == 200:
+                    return link
+            except: continue
+            
+        return None # No valid images found
     except: return None
 
 def get_img_reader(url):
